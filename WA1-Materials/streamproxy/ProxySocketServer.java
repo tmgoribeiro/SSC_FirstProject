@@ -5,7 +5,6 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executors;
-import java.lang.Thread;
 
 /**
  * Proxy implemented with raw sockets only (java.net.ServerSocket / Socket), no
@@ -165,7 +164,7 @@ public class ProxySocketServer {
                 int n = originIn.read(buf, 0, (int) Math.min(buf.length, remaining));
                 if (n < 0) break;
 		try{
-		    Thread.sleep(2000);
+		    Thread.sleep(0);
 		    // can you push for the minimum required to
 		    // mainain good buffering and playout delay maintaining
 		    // a good vizualization-playing experience ?

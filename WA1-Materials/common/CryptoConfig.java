@@ -125,15 +125,15 @@ public class CryptoConfig
         return s.replaceAll("(?i)SHA-(1|224|256|384|512)$", "SHA$1");
     }
 
-    /**
+     /**
      * Proposed Cryptographic Configuration (PCC) sent in handshake message type 1,
-     * in the format of the assignment: ALG/MODE/IV/Padding (plus the MAC, so that
-     * the MAC algorithm is also negotiated). Keys are NEVER part of it.
+     * in the exact format of the assignment (section 2.2.3): ALG/MODE/IV/Padding
+     * (IV = IV size in bits; NULL fields written as NULL). Keys are NEVER part of it.
      */
     public String proposal()
     {
         return n(algorithm) + "/" + n(mode) + "/" + (ivSize == 0 ? "NULL" : ivSize)
-             + "/" + n(padding) + "/" + n(macAlgorithm);
+             + "/" + n(padding);
     }
 
     /**

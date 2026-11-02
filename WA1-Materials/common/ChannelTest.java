@@ -7,10 +7,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Tests SecureChannel against a Man-in-the-Middle (Mallory, as in Lab 3.1
- * TamperingExample) that can read, modify, inject, replay, reorder or drop
- * messages (the attacker of the WA1 threat model, section 3).
- *
  * The "sender" writes a small session into a buffer (the network):
  *     type 2 (SEQ inside)   SEQX+1
  *     type 4 (SEQ in clear) SEQX+2, SEQX+3, SEQX+4    (3 stream blocks)

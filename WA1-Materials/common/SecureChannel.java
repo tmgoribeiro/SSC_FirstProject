@@ -1,12 +1,10 @@
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Sends and receives messages of the Secure Streaming Protocol (WA1 2.2.3) over
@@ -14,9 +12,11 @@ import java.io.OutputStream;
  *
  *   Header (clear): version (2) || release (2) || type (1) || size of payload (4)
  *
- * As in Lab 2 (SendEncrypt / ReceiveDecrypt, FileTransferClient / Server): a
- * DataOutputStream writes the fields (writeShort, writeByte, writeInt, write) and a
- * DataInputStream reads them back (readUnsignedShort, readInt, readFully).
+ * As Lab 2 SendEncrypt / ReceiveDecrypt:
+ *   DataOutputStream os = new DataOutputStream(s.getOutputStream());
+ *   os.writeInt(ciphertext.length); os.write(ciphertext);
+ *   DataInputStream is = new DataInputStream(s.getInputStream());
+ *   ciphertext = new byte[is.readInt()]; is.read(ciphertext);
  *
  * Protected payloads use CryptoSuite (Passo 2) and SEQUENCE NUMBERS:
  *   Types 2, 3:  E( SEQ || body )           AAD = version || release || type
@@ -38,21 +38,30 @@ public class SecureChannel
 
     public SecureChannel(InputStream in, OutputStream out, CryptoSuite suite)
     {
-        this.in = new DataInputStream(new BufferedInputStream(in));
-        this.out = new DataOutputStream(new BufferedOutputStream(out));
+        this.in = new DataInputStream(in);       // as ReceiveDecrypt
+        this.out = new DataOutputStream(out);    // as SendEncrypt
         this.suite = suite;
     }
 
     // =============================================================== Header || Payload
 
-    /** Send one message: Header || Payload. */
+    /**
+     * Send one message: Header || Payload.
+     * The fields are written as SendEncrypt does (writeShort, writeByte, writeInt, write),
+     * into one buffer that is then sent at once: one TCP write per message, so no
+     * small separate packets (that could delay the video).
+     */
     public void send(int type, byte[] payload) throws IOException
     {
-        out.writeShort(Protocol.VERSION);
-        out.writeShort(Protocol.RELEASE);
-        out.writeByte(type);
-        out.writeInt(payload.length);          // as SendEncrypt: os.writeInt(ciphertext.length)
-        out.write(payload);                    //                 os.write(ciphertext)
+        ByteArrayOutputStream message = new ByteArrayOutputStream();   // as HttpUtil (base code)
+        DataOutputStream os = new DataOutputStream(message);
+        os.writeShort(Protocol.VERSION);
+        os.writeShort(Protocol.RELEASE);
+        os.writeByte(type);
+        os.writeInt(payload.length);            // as SendEncrypt: os.writeInt(ciphertext.length)
+        os.write(payload);                      //                 os.write(ciphertext)
+
+        out.write(message.toByteArray());
         out.flush();
         bytesSent += Protocol.HEADER_SIZE + payload.length;
     }
@@ -74,14 +83,15 @@ public class SecureChannel
             throw new ProtocolException(Protocol.ALERT_MALFORMED, "payload size " + size);
 
         byte[] payload = new byte[size];
-        in.readFully(payload);                 // (ReceiveDecrypt uses is.read(): it may read less)
+        in.readFully(payload);                 // ReceiveDecrypt uses is.read(), that may read
+                                               // LESS than asked: readFully reads all the bytes
         bytesReceived += Protocol.HEADER_SIZE + size;
 
         if (type == Protocol.TYPE_255)
         {
-            DataInputStream d = new DataInputStream(new ByteArrayInputStream(payload));
-            int code = d.readUnsignedByte();
-            String reason = d.available() > 0 ? d.readUTF() : "";
+            // alert: code (1 byte) || reason (text)
+            int code = payload.length > 0 ? payload[0] & 0xff : 0;
+            String reason = payload.length > 1 ? new String(payload, 1, payload.length - 1, StandardCharsets.UTF_8) : "";
             throw new AlertException(code, reason);
         }
         return new Message(type, payload);
@@ -97,34 +107,27 @@ public class SecureChannel
         return m;
     }
 
-    /** Send an error alert (type 255): code || reason. In clear (there may be no shared key). */
+    /** Send an error alert (type 255): code (1 byte) || reason. In clear (there may be no shared key). */
     public void sendAlert(int code, String reason)
     {
         try
         {
-            ByteArrayOutputStream b = new ByteArrayOutputStream();
-            DataOutputStream d = new DataOutputStream(b);
-            d.writeByte(code);
-            d.writeUTF(reason == null ? "" : reason);
-            send(Protocol.TYPE_255, b.toByteArray());
+            byte[] text = (reason == null ? "" : reason).getBytes(StandardCharsets.UTF_8);
+            send(Protocol.TYPE_255, Utils.concat(new byte[] { (byte) code }, text));
         }
         catch (IOException e)
         {
-            // the other side is already gone: nothing to do
+            // the other side is already gone: nothing to do (as SendEncrypt: catch ... { })
         }
     }
-
 
     // ===================================== Types 2, 3:  E( SEQ || body )
 
     /** Encrypt SEQ || body and send it (handshake messages 2 and 3). */
     public void sendSeqInside(int type, long seq, byte[] body) throws IOException, CryptoException
     {
-        ByteArrayOutputStream b = new ByteArrayOutputStream();
-        DataOutputStream d = new DataOutputStream(b);
-        d.writeLong(seq);
-        d.write(body);
-        send(type, suite.encrypt(b.toByteArray(), aad(type)));
+        byte[] plaintext = Utils.concat(Utils.longToBytes(seq), body);
+        send(type, suite.encrypt(plaintext, aad(type)));
     }
 
     /** Decrypt a type 2 / 3 message, check its SEQ and return the body. */
@@ -133,7 +136,7 @@ public class SecureChannel
         byte[] plaintext = decrypt(m.payload, aad(m.type));
         if (plaintext.length < 8)
             throw new ProtocolException(Protocol.ALERT_MALFORMED, "no sequence number");
-        long seq = readLong(plaintext, 0);
+        long seq = Utils.bytesToLong(plaintext, 0);
         checkSeq(seq, expectedSeq);
         byte[] body = new byte[plaintext.length - 8];
         System.arraycopy(plaintext, 8, body, 0, body.length);
@@ -145,11 +148,8 @@ public class SecureChannel
     /** Send SEQ (clear) || E(body); the SEQ is also in the AAD (stream blocks 4 and 5). */
     public void sendSeqClear(int type, long seq, byte[] body) throws IOException, CryptoException
     {
-        ByteArrayOutputStream b = new ByteArrayOutputStream();
-        DataOutputStream d = new DataOutputStream(b);
-        d.writeLong(seq);
-        d.write(suite.encrypt(body, aad(type, seq)));
-        send(type, b.toByteArray());
+        byte[] encrypted = suite.encrypt(body, aad(type, seq));
+        send(type, Utils.concat(Utils.longToBytes(seq), encrypted));
     }
 
     /** Check the clear SEQ FIRST (cheap rejection of replays), then decrypt the block. */
@@ -157,37 +157,27 @@ public class SecureChannel
     {
         if (m.payload.length < 8)
             throw new ProtocolException(Protocol.ALERT_MALFORMED, "no sequence number");
-        long seq = readLong(m.payload, 0);
+        long seq = Utils.bytesToLong(m.payload, 0);
         checkSeq(seq, expectedSeq);
         byte[] encrypted = new byte[m.payload.length - 8];
         System.arraycopy(m.payload, 8, encrypted, 0, encrypted.length);
         return decrypt(encrypted, aad(m.type, seq));
     }
 
+    // =============================================================== helpers
 
     /** AAD = version || release || type   (the header fields sent in clear). */
     private static byte[] aad(int type)
     {
-        return aad(type, null);
+        return new byte[] { (byte)(Protocol.VERSION >> 8), (byte) Protocol.VERSION,
+                            (byte)(Protocol.RELEASE >> 8), (byte) Protocol.RELEASE,
+                            (byte) type };
     }
 
     /** AAD = version || release || type || SEQ   (for blocks, where the SEQ goes in clear). */
-    private static byte[] aad(int type, Long seq)
+    private static byte[] aad(int type, long seq)
     {
-        try
-        {
-            ByteArrayOutputStream b = new ByteArrayOutputStream();
-            DataOutputStream d = new DataOutputStream(b);
-            d.writeShort(Protocol.VERSION);
-            d.writeShort(Protocol.RELEASE);
-            d.writeByte(type);
-            if (seq != null) d.writeLong(seq);
-            return b.toByteArray();
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);    // cannot happen with a ByteArrayOutputStream
-        }
+        return Utils.concat(aad(type), Utils.longToBytes(seq));
     }
 
     private byte[] decrypt(byte[] encrypted, byte[] aad) throws ProtocolException
@@ -210,19 +200,4 @@ public class SecureChannel
                 "expected SEQ " + expectedSeq + ", got " + seq
                 + (seq < expectedSeq ? " (replayed or duplicated message)" : " (reordered or missing message)"));
     }
-
-    /** The 8-byte SEQ at the start of b (as written by DataOutputStream.writeLong). */
-    private static long readLong(byte[] b, int off)
-    {
-        try
-        {
-            DataInputStream d = new DataInputStream(new ByteArrayInputStream(b, off, 8));
-            return d.readLong();
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);    // cannot happen: the caller checked length >= 8
-        }
-    }
-
 }

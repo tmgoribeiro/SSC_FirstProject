@@ -148,6 +148,8 @@ public class CryptoConfig
             throw new CryptoException("<Keysize> must be 128, 192 or 256 bits");
         if ("ECB".equalsIgnoreCase(mode))
             throw new CryptoException("ECB is not allowed: identical blocks give identical ciphertext");
+        if ("ChaCha20".equalsIgnoreCase(algorithm) && symKeySize != 256)   // ChaCha20 only has 256-bit keys
+            throw new CryptoException("ChaCha20 needs a 256-bit key (<Keysize> 256)");
         if (!isAEAD() && macAlgorithm == null)
             throw new CryptoException(transformation() + " gives no integrity: use an AEAD mode or configure a MAC");
         if (macAlgorithm != null && macKey == null)

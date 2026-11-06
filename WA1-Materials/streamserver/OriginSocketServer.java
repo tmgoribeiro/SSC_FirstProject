@@ -16,18 +16,27 @@ import java.util.concurrent.Executors;
  * works. Each connection handles exactly one request, then closes (Connection: close) -
  * that keeps the hand-written HTTP parsing simple.
  *
- * Usage: java OriginSocketServer [port=8081] [mediaDir=media]
- */
+ * WA1 (Secure Stream Server): the HTTP request from the proxy is replaced by the
+ * handshake of the Secure Streaming Protocol (types 1, 2, 3), and the response
+ * (the same HTTP headers + body as before) is sent through a SecureOutputStream:
+ * every block becomes an encrypted Type 4 message, and the end a Type 5 message.
+ * The cryptographic configuration is read from sservercrypto.config.
+ *
+ * Usage: java OriginSocketServer [port=8081] [mediaDir=media] [config=sservercrypto.config] */
 public class OriginSocketServer {
 
     static final int BLOCK_SIZE = 1024;
+    
+    static CryptoConfig cfg;                                                    
 
     public static void main(String[] args) throws Exception {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 8081;
         Path root = Paths.get(args.length > 1 ? args[1] : "media").toAbsolutePath().normalize();
+        cfg = CryptoConfig.load(args.length > 2 ? args[2] : "sservercrypto.config");   // 
 
         try (ServerSocket server = new ServerSocket(port)) {
             System.out.println("Origin server on http://localhost:" + port + "/media/<file.mp4>  (dir: " + root + ")");
+            System.out.println("Secure Stream Server: " + cfg.proposal());     // WA1
             var pool = Executors.newCachedThreadPool();
             while (true) {
                 Socket client = server.accept();
@@ -36,39 +45,39 @@ public class OriginSocketServer {
         }
     }
 
-    static void handle(Socket socket, Path root) {
+        static void handle(Socket socket, Path root) {
         try (socket) {
             var in = socket.getInputStream();
             var out = socket.getOutputStream();
 
-            String requestLine = HttpUtil.readLine(in);
-            if (requestLine == null || !requestLine.startsWith("GET ")) {
-                writeStatus(out, 400, "Bad Request", 0);
-                return;
-            }
-            String path = requestLine.split(" ")[1];
+            // WA1: the handshake (types 1, 2, 3) replaces the HTTP request line + headers
+            SecureChannel ch = new SecureChannel(in, out, new CryptoSuite(cfg));
+            try {
+                Handshake.Result r = Handshake.server(ch, cfg);
 
-            String rangeHeader = null;
-            String line;
-            while ((line = HttpUtil.readLine(in)) != null && !line.isEmpty()) {
-                int c = line.indexOf(':');
-                if (c > 0 && line.substring(0, c).equalsIgnoreCase("Range")) {
-                    rangeHeader = line.substring(c + 1).trim();
+                // WA1 (extension): MEDIA = movie name || "\r\n" || Range header of the browser (empty if none)
+                String[] media = r.media.split("\r\n", -1);
+                String name = media[0];
+                String rangeHeader = (media.length > 1 && !media[1].isEmpty()) ? media[1] : null;
+
+                out = new SecureOutputStream(ch, r.firstBlockSeq);         // WA1: from here on, out is the secure stream
+                try {
+                    Path file = root.resolve(name).normalize();
+                    if (!file.startsWith(root) || !Files.isRegularFile(file)) {
+                        writeStatus(out, 404, "Not Found", 0);
+                        return;
+                    }
+
+                    serveFile(out, file, rangeHeader);
+                } finally {
+                    out.close();                                            // WA1: Type 5 (END)
                 }
+            } catch (ProtocolException e) {                                 // WA1
+                System.out.println("Error: " + e.getMessage());
+                ch.sendAlert(e.alert, e.getMessage());          // "notified with an alert-error message"
+            } catch (AlertException | CryptoException e) {                  // WA1
+                System.out.println("Error: " + e.getMessage());
             }
-
-            if (!path.startsWith("/media/")) {
-                writeStatus(out, 404, "Not Found", 0);
-                return;
-            }
-            String name = path.substring("/media/".length());
-            Path file = root.resolve(name).normalize();
-            if (!file.startsWith(root) || !Files.isRegularFile(file)) {
-                writeStatus(out, 404, "Not Found", 0);
-                return;
-            }
-
-            serveFile(out, file, rangeHeader);
         } catch (IOException e) {
             // Client (the proxy) disconnected mid-stream: normal on seek/close, nothing to do.
         }

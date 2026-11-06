@@ -14,11 +14,19 @@ import java.util.concurrent.Executors;
  * block (no whole-file buffering). Each browser connection handles one request,
  * then closes.
  *
- * Usage: java ProxySocketServer [port=8080] [originHost=localhost] [originPort=8081]
+ * WA1 (Secure Proxy): the HTTP request to the origin is replaced by the handshake of
+ * the Secure Streaming Protocol (types 1, 2, 3), and the response is read through a
+ * SecureInputStream, which decrypts and verifies every Type 4 block and the Type 5 END.
+ * The cryptographic configuration is read from proxycrypto.config. After each
+ * stream the proxy prints the metrics of WA1 section 4 (ProxyMetrics).
+ *
+ * Usage: java ProxySocketServer [port=8080] [originHost=localhost] [originPort=8081] [config=proxycrypto.config]
  */
 public class ProxySocketServer {
 
     static final int BLOCK_SIZE = 1024;
+
+    static CryptoConfig cfg;                                                    // WA1
 
     static final String INDEX_HTML = """
             <!doctype html>
@@ -43,9 +51,11 @@ public class ProxySocketServer {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 8080;
         String originHost = args.length > 1 ? args[1] : "localhost";
         int originPort = args.length > 2 ? Integer.parseInt(args[2]) : 8081;
+        cfg = CryptoConfig.load(args.length > 3 ? args[3] : "proxycrypto.config");    // WA1 (read + validate)
 
         try (ServerSocket server = new ServerSocket(port)) {
             System.out.println("Proxy on http://localhost:" + port + "/  ->  http://" + originHost + ":" + originPort);
+            System.out.println("Secure Proxy: " + cfg.proposal());              // WA1
             var pool = Executors.newCachedThreadPool();
             while (true) {
                 Socket client = server.accept();
@@ -110,13 +120,18 @@ public class ProxySocketServer {
             OutputStream originOut = origin.getOutputStream();
             InputStream originIn = origin.getInputStream();
 
-            StringBuilder req = new StringBuilder();
-            req.append("GET /media/").append(name).append(" HTTP/1.1\r\n")
-                    .append("Host: ").append(originHost).append(":").append(originPort).append("\r\n");
-            if (rangeHeader != null) req.append("Range: ").append(rangeHeader).append("\r\n");
-            req.append("Connection: close\r\n\r\n");
-            originOut.write(req.toString().getBytes(StandardCharsets.US_ASCII));
-            originOut.flush();
+            // WA1: the handshake (types 1, 2, 3) replaces the HTTP request
+            //      (extension) MEDIA = movie name || "\r\n" || Range header of the browser (empty if none)
+            SecureChannel ch = new SecureChannel(originIn, originOut, new CryptoSuite(cfg));
+            ProxyMetrics stats = new ProxyMetrics(name, rangeHeader);
+            SecureInputStream sin = null;
+            boolean headersSent = false;
+            String end = "INCOMPLETE";
+            try {
+                Handshake.Result r = Handshake.proxy(ch, cfg, name + "\r\n" + (rangeHeader == null ? "" : rangeHeader));
+                sin = new SecureInputStream(ch, r.firstBlockSeq);
+                originIn = sin;                     // WA1: the same code below now reads the decrypted stream
+                stats.start();
 
             // Parse the origin's status line + headers
             String statusLine = HttpUtil.readLine(originIn);
@@ -154,8 +169,10 @@ public class ProxySocketServer {
             resp.append("Connection: close\r\n\r\n");
             browserOut.write(resp.toString().getBytes(StandardCharsets.US_ASCII));
             browserOut.flush();
+            headersSent = true;                                                 // WA1
+            stats.response(code, contentLength, contentRange);                  // WA1
 
-            if (contentLength <= 0) return;
+            if (contentLength > 0) {                                            // WA1 (was: if (contentLength <= 0) return;)
 
             // Relay the body block by block; closing either socket cancels the transfer.
             byte[] buf = new byte[BLOCK_SIZE];
@@ -174,7 +191,33 @@ public class ProxySocketServer {
 		    
                 browserOut.write(buf, 0, n);
                 browserOut.flush();
+                stats.forwarded(n);                                             // WA1
                 remaining -= n;
+            }
+            }                                                                   // WA1
+
+                // WA1: the stream must end with a valid Type 5 (END) right after the last block
+                if (originIn.read() != -1)
+                    throw new ProtocolException(Protocol.ALERT_UNEXPECTED_MESSAGE, "more data than the Content-Length");
+                end = "COMPLETE (END verified)";
+
+            } catch (ProtocolException e) {                                     // WA1: protocol violation
+                end = "ERROR " + e.getMessage();
+                ch.sendAlert(e.alert, e.getMessage());          // "notified with an alert-error message"
+                if (!headersSent) writeSimpleStatus(browserOut, 502, "Bad Gateway");
+            } catch (AlertException | CryptoException e) {                      // WA1: alert received from the server
+                end = "ERROR " + e.getMessage();
+                if (!headersSent) writeSimpleStatus(browserOut, 502, "Bad Gateway");
+            } catch (IOException e) {                                           // WA1
+                if (e.getCause() instanceof ProtocolException pe) {     // violation detected inside the stream
+                    end = "ERROR " + pe.getMessage();
+                    ch.sendAlert(pe.alert, pe.getMessage());
+                } else {                                        // browser or server closed the connection
+                    end = "INCOMPLETE (" + e + ")";
+                }
+                if (!headersSent) writeSimpleStatus(browserOut, 502, "Bad Gateway");
+            } finally {
+                stats.print(ch, sin, end);                                      // WA1: metrics (section 4)
             }
         }
     }

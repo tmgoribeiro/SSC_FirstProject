@@ -7,37 +7,31 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
+import java.security.Security;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
 /**
  * Cryptographic configuration of the Secure Proxy / Secure Stream Server,
- * read from proxycrypto.config / sservercrypto.config (WA1, section 2.2.2).
- *
- * Nothing cryptographic is hard-coded in the programs (WA1, section 2.2.4):
- * algorithm, mode, IV, padding, MAC and keys all come from this file.
- *
- * In the file, NULL (or an empty element) means "not used".
  */
+
 public class CryptoConfig
 {
-    // <SymCipherSuite>
+
+    static { Security.addProvider(new BouncyCastleProvider());}
     public String algorithm;     // ex: AES, ChaCha20, RC6
     public String mode;          // ex: GCM, CBC, CTR, Poly1305, or null
     public byte[] iv;            // IV value, or null
     public int    ivSize;        // IV size in bits, or 0
     public String padding;       // ex: PKCS5Padding, NoPadding, or null
 
-    // <MACsuite>
     public String macAlgorithm;  // ex: HMAC-SHA256, or null
 
-    // <ConfiguredKeys>
     public byte[] symKey;
     public int    symKeySize;    // bits
     public byte[] macKey;        // or null
     public int    macKeySize;    // bits, or 0
 
-    // (1.7: the load() method goes here)
-
-/**
+    /**
      * Read and validate a configuration file (proxycrypto.config / sservercrypto.config).
      */
     public static CryptoConfig load(String fileName) throws CryptoException
@@ -74,14 +68,14 @@ public class CryptoConfig
             c.macKeySize = mkSize == null ? 0 : Integer.parseInt(mkSize);
             c.macKey     = mkText == null ? null : decode(mkText, c.macKeySize, "MacKey");
 
-            c.validate();        // 1.8: refuse insecure / inconsistent configurations
+            c.validate();        
             return c;
         }
         catch (CryptoException e)
         {
             throw e;             // already has a clear message
         }
-        catch (Exception e)      // XML syntax error, number that is not a number, file not found, ...
+        catch (Exception e)   
         {
             throw new CryptoException("Invalid config file " + fileName + ": " + e.getMessage(), e);
         }
@@ -89,9 +83,7 @@ public class CryptoConfig
 
 
     /**
-     * True for AEAD modes (confidentiality + integrity + authenticity in one
-     * operation): AES/GCM, AES/CCM and ChaCha20-Poly1305. These need no MAC.
-     * (Lab 3.2: AESGCM, SimpleCCMExample, ChaCha20Poly1305)
+     * True for AEAD modes
      */
     public boolean isAEAD()
     {
@@ -100,9 +92,7 @@ public class CryptoConfig
     }
 
     /**
-     * The JCE transformation for Cipher.getInstance(), as in the Labs:
-     * "AES/GCM/NoPadding", "AES/CBC/PKCS5Padding", "ChaCha20-Poly1305", "ChaCha20"
-     * (hjCipherTest receives this string as an argument: here it comes from the config)
+     * The JCE transformation for Cipher.getInstance()
      */
     public String transformation()
     {
@@ -112,14 +102,14 @@ public class CryptoConfig
     }
 
     /**
-     * Java name of the configured MAC, for Mac.getInstance() (as in HmacExample):
-     * "HMAC-SHA256" -> "HmacSHA256", "HMAC-SHA-512" -> "HmacSHA512" (both forms appear
-     * in the assignment), "HMAC-SHA3-256" -> "HmacSHA3-256", "HmacSHA384" stays.
+     * Java name of the configured MAC, for Mac.getInstance()
+     * (null if no MAC is configured)
      */
     public String macJavaName()
     {
         if (macAlgorithm == null) return null;
         String s = macAlgorithm.trim();
+        if (s.equalsIgnoreCase("AES-CMAC") || s.equalsIgnoreCase("CMAC")) return "AESCMAC";
         if (s.regionMatches(true, 0, "HMAC-", 0, 5)) s = "Hmac" + s.substring(5);
         else if (s.regionMatches(true, 0, "HMAC", 0, 4)) s = "Hmac" + s.substring(4);
         return s.replaceAll("(?i)SHA-(1|224|256|384|512)$", "SHA$1");
@@ -127,8 +117,7 @@ public class CryptoConfig
 
      /**
      * Proposed Cryptographic Configuration (PCC) sent in handshake message type 1,
-     * in the exact format of the assignment (section 2.2.3): ALG/MODE/IV/Padding
-     * (IV = IV size in bits; NULL fields written as NULL). Keys are NEVER part of it.
+     * in the format (algorithm/mode/ivSize/padding).
      */
     public String proposal()
     {
@@ -156,6 +145,8 @@ public class CryptoConfig
             throw new CryptoException("<MACsuite> is configured but <MacKey> is NULL");
         if (macKey != null && java.util.Arrays.equals(macKey, symKey))
             throw new CryptoException("The MAC key must be different from the encryption key");
+        if ("CCM".equalsIgnoreCase(mode) && (ivSize < 56 || ivSize > 104 || ivSize % 8 != 0))   // WA1 7.3
+            throw new CryptoException("CCM needs a nonce of 7 to 13 bytes (<IVSIZE> 56..104)");
         if (mode != null && ivSize == 0)
             throw new CryptoException("Mode " + mode + " needs an <IVSIZE>");
     }

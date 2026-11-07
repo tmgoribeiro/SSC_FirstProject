@@ -118,6 +118,8 @@ public class CryptoSuite
         String t = cfg.transformation();
         if (t.contains("/GCM/"))
             return new GCMParameterSpec(GCM_TAG_LENGTH, nonce);       // SimpleGCMExample
+        if (t.contains("/CCM/"))                                    
+            return new GCMParameterSpec(GCM_TAG_LENGTH, nonce);       // its TAG_LENGTH = 128 (IvParameterSpec gives 64)
         if (t.equals("ChaCha20"))
             return new ChaCha20ParameterSpec(nonce, INITIAL_COUNTER); // ChaCha20.java
         return new IvParameterSpec(nonce);   // CBC, CTR (SimpleCBC/CTRExample), ChaCha20-Poly1305

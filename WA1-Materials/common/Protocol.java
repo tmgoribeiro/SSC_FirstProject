@@ -1,26 +1,12 @@
 /**
- * Constants of the Secure Streaming Protocol (WA1, section 2.2.3).
+ * Constants of the Secure Streaming Protocol.
  *
  * Every message:   Header || Payload
  *
- *   Header (always in plaintext):
- *     HS Version (2 bytes) || HS Release (2 bytes) || HS message type (1 byte) || Size of Payload (4 bytes)
- *
- *   Payload, depending on the message type:
- *     Type 1   (Proxy -> Server, clear)      SEQX || PCC
- *     Type 2   (Server -> Proxy, encrypted)  E( SEQY || SRV || CCC )            SEQY = SEQX + 1
- *     Type 3   (Proxy -> Server, encrypted)  E( SEQZ || R || MEDIA )            SEQZ = SEQY + 1, R = SHA256(SRV)
- *     Type 4   (Server -> Proxy)             SEQB || E( block )                 SEQB = SEQZ + 1, + 1, ...
- *     Type 5   (Server -> Proxy)             SEQF || E( SEQF || "END" || random string )
- *     Type 255 (error alert)
- *
- * The 4-byte size and the encoding with DataOutputStream (writeShort, writeByte,
- * writeInt, writeLong, writeUTF) follow Lab 2: SendEncrypt (os.writeInt(ciphertext.length);
- * os.write(ciphertext)) and FileTransferClient (dos.writeUTF(name); dos.writeLong(size)).
- */
+*/
 public class Protocol
 {
-    // HS Version:Release -- "For Work Assignment 1, version:release is 1:1"
+    // HS Version:Release
     public static final int VERSION = 1;
     public static final int RELEASE = 1;
 
@@ -34,10 +20,10 @@ public class Protocol
 
     public static final int HEADER_SIZE = 2 + 2 + 1 + 4;   // bytes
 
-    // Largest payload accepted: a forged "Size of Payload" cannot make us allocate GBs (DoS)
+    // Largest payload accepted
     public static final int MAX_PAYLOAD = 1024 * 1024;
 
-    // Alert codes (payload of a type 255 message: code (1 byte) || reason (writeUTF))
+    // Alert codes
     public static final int ALERT_UNEXPECTED_MESSAGE = 1;  // message type not expected now
     public static final int ALERT_BAD_VERSION        = 2;  // version:release is not 1:1
     public static final int ALERT_MALFORMED          = 3;  // payload cannot be parsed / wrong size

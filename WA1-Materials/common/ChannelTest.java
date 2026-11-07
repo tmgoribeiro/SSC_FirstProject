@@ -7,14 +7,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The "sender" writes a small session into a buffer (the network):
- *     type 2 (SEQ inside)   SEQX+1
- *     type 4 (SEQ in clear) SEQX+2, SEQX+3, SEQX+4    (3 stream blocks)
- *     type 5 (SEQ in clear) SEQX+5                     (end of stream)
+ * The "sender" writes a small session into a buffer 
+ * 
+ * 
  * Mallory changes the list of messages; the "receiver" reads them and must
  * accept the normal session and REJECT every attack.
  *
- * Use: java ChannelTest <config file>
  */
 public class ChannelTest
 {
@@ -30,11 +28,10 @@ public class ChannelTest
         }
         cfg = CryptoConfig.load(args[0]);
         System.out.println("Config: " + cfg.proposal() + (cfg.macAlgorithm != null ? " + " + cfg.macAlgorithm : ""));
-        seqX = new SecureRandom().nextLong() & Long.MAX_VALUE;   // random initial SEQ (WA1 2.2.3)
+        seqX = new SecureRandom().nextLong() & Long.MAX_VALUE;   // random initial SEQ
 
         List<byte[]> session = recordSession(seqX);
-        List<byte[]> other = recordSession(seqX + 1000);       // an OLD session, other SEQs
-
+        List<byte[]> other = recordSession(seqX + 1000);    
         int failures = 0;
         failures += run("normal session                     ", session, true);
         failures += run("replay block 1 (sent twice)         ", list(session, 0, 1, 1, 2, 3, 4), false);
@@ -53,7 +50,6 @@ public class ChannelTest
         System.out.println(failures == 0 ? "ALL TESTS PASSED" : failures + " TEST(S) FAILED");
     }
 
-    // ------------------------------------------------------------ the session
 
     /** The sender writes the messages into a buffer; returns them one by one. */
     static List<byte[]> recordSession(long seqX) throws Exception
@@ -114,7 +110,9 @@ public class ChannelTest
         return ok ? 0 : 1;
     }
 
-    // ------------------------------------------------------------ Mallory
+    // Mallory
+
+
 
     static List<byte[]> list(List<byte[]> s, int... idx)
     {
@@ -179,7 +177,7 @@ public class ChannelTest
         return r;
     }
 
-    // ------------------------------------------------------------ helpers
+
 
     /** Split the bytes of the "network" into messages, using the header size field. */
     static List<byte[]> split(byte[] wire) throws IOException

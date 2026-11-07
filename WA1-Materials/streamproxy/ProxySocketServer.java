@@ -55,7 +55,8 @@ public class ProxySocketServer {
 
         try (ServerSocket server = new ServerSocket(port)) {
             System.out.println("Proxy on http://localhost:" + port + "/  ->  http://" + originHost + ":" + originPort);
-            System.out.println("Secure Proxy: " + cfg.proposal());              // WA1
+            System.out.println("Secure Proxy: " + cfg.proposal());           
+            System.out.println("Pause between blocks: " + Long.getLong("delay", 0) + " ms");   // WA1 7.2
             var pool = Executors.newCachedThreadPool();
             while (true) {
                 Socket client = server.accept();
@@ -181,8 +182,7 @@ public class ProxySocketServer {
                 int n = originIn.read(buf, 0, (int) Math.min(buf.length, remaining));
                 if (n < 0) break;
 		try{
-		    Thread.sleep(0);
-		    // can you push for the minimum required to
+            Thread.sleep(Long.getLong("delay", 0));		    // can you push for the minimum required to
 		    // mainain good buffering and playout delay maintaining
 		    // a good vizualization-playing experience ?
 		} catch (InterruptedException e) {

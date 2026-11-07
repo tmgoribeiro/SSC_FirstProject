@@ -3,13 +3,15 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * Checks a crypto config file: reads it, shows what was read, and checks that the
- * JCE providers support the configured cipher and MAC (as hjCipherTest does).
- *
- * Use: java ConfigTest <config file> [<config file> ...]
+ * Reads each configuration file, shows its values and checks that Java supports the configured cipher and MAC
  */
 public class ConfigTest
 {
+    /**
+     * Check every configuration file and print VALID or REFUSED
+     *
+     * @param args : configuration files
+     */
     public static void main(String[] args)
     {
         if (args.length == 0)
@@ -36,9 +38,8 @@ public class ConfigTest
                 System.out.println("Transformation : " + c.transformation());
                 System.out.println("Proposal (PCC) : " + c.proposal());
 
-                // Can this JVM use it? (as hjCipherTest: Cipher.getInstance + init with the key)
                 Cipher cipher = Cipher.getInstance(c.transformation());
-                SecretKeySpec key = new SecretKeySpec(c.symKey, c.algorithm);   // as KeyRing.readSecretKey()
+                SecretKeySpec key = new SecretKeySpec(c.symKey, c.algorithm);
                 cipher.init(Cipher.ENCRYPT_MODE, key);   // fails if the key does not fit the algorithm
                 System.out.println("Cipher         : OK (provider " + cipher.getProvider().getName() + ")");
                 if (c.macAlgorithm != null)

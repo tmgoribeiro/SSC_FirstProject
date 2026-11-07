@@ -1,11 +1,5 @@
 /**
- * Auxiliar
- * Some conversion functions
- *
- * toHex: as Lab 2 common/Utils.java
- * longToBytes / bytesToLong: as Lab 3.1 Utils.createCtrIvForAES, which puts the
- *     message number in the IV byte by byte:  ivBytes[0] = (byte)(messageNumber >> 24); ...
- * concat: as Lab 3.2 SimpleGCMExample ("prepend nonce to ciphertext"), with System.arraycopy
+ * Helper functions: hexadecimal, conversion between long and bytes, concatenation
  */
 public class Utils
 {
@@ -16,10 +10,9 @@ public class Utils
      *
      * @param data : bytes to convert
      * @param length : nr of bytes in data block to be converted
-     * @return  hex : hexadecimal representation of data
+     * @return hex : hexadecimal representation of data
      */
-
-   public static String toHex(byte[] data, int length)
+    public static String toHex(byte[] data, int length)
     {
         StringBuffer	buf = new StringBuffer();
 
@@ -35,10 +28,10 @@ public class Utils
     }
 
     /**
-     * Return data in byte array from string hexadecimal
+     * Return string hexadecimal from byte array
      *
-     * @param data : bytes to be converted
-     * @return : hexadecimal repersentatin of data
+     * @param data : bytes to convert
+     * @return hex : hexadecimal representation of data
      */
     public static String toHex(byte[] data)
     {
@@ -46,8 +39,10 @@ public class Utils
     }
 
     /**
-     * Number (e.g. a sequence number) -> 8 bytes, most significant byte first,
-     * as createCtrIvForAES (Lab 3.1) does with the message number.
+     * Convert a number to 8 bytes, most significant byte first
+     *
+     * @param number : number to convert (ex. a sequence number)
+     * @return bytes : 8-byte representation
      */
     public static byte[] longToBytes(long number)
     {
@@ -60,7 +55,11 @@ public class Utils
     }
 
     /**
-     * 8 bytes starting at offset -> number (the inverse of longToBytes).
+     * Convert 8 bytes back to a number (inverse of longToBytes)
+     *
+     * @param bytes : array with the 8 bytes
+     * @param offset : position of the first byte
+     * @return number : the number
      */
     public static long bytesToLong(byte[] bytes, int offset)
     {
@@ -73,10 +72,11 @@ public class Utils
     }
 
     /**
-     * a || b, as SimpleGCMExample joins nonce || ciphertext:
-     *   byte[] result = new byte[nonce.length + ciphertext.length];
-     *   System.arraycopy(nonce, 0, result, 0, nonce.length);
-     *   System.arraycopy(ciphertext, 0, result, nonce.length, ciphertext.length);
+     * Concatenate two byte arrays
+     *
+     * @param a : first array
+     * @param b : second array
+     * @return result : a || b
      */
     public static byte[] concat(byte[] a, byte[] b)
     {

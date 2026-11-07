@@ -11,13 +11,13 @@ import java.security.Security;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
 /**
- * Cryptographic configuration of the Secure Proxy / Secure Stream Server,
+ * Cryptographic configuration of the Secure Proxy / Secure Stream Server, read from an XML file
  */
-
 public class CryptoConfig
 {
+    // Bouncy Castle provider (RC6, AES/CCM, AES-CMAC), added after the default providers
+    static { Security.addProvider(new BouncyCastleProvider()); }
 
-    static { Security.addProvider(new BouncyCastleProvider());}
     public String algorithm;     // ex: AES, ChaCha20, RC6
     public String mode;          // ex: GCM, CBC, CTR, Poly1305, or null
     public byte[] iv;            // IV value, or null
@@ -32,7 +32,10 @@ public class CryptoConfig
     public int    macKeySize;    // bits, or 0
 
     /**
-     * Read and validate a configuration file (proxycrypto.config / sservercrypto.config).
+     * Read and validate a configuration file
+     *
+     * @param fileName : path of the configuration file
+     * @return config : the configuration read from the file
      */
     public static CryptoConfig load(String fileName) throws CryptoException
     {
@@ -73,7 +76,7 @@ public class CryptoConfig
         }
         catch (CryptoException e)
         {
-            throw e;             // already has a clear message
+            throw e;           
         }
         catch (Exception e)   
         {
@@ -81,9 +84,10 @@ public class CryptoConfig
         }
     }
 
-
     /**
-     * True for AEAD modes
+     * Check if the configured mode is AEAD (GCM, CCM or Poly1305)
+     *
+     * @return aead : true if the mode already gives integrity
      */
     public boolean isAEAD()
     {
@@ -92,7 +96,9 @@ public class CryptoConfig
     }
 
     /**
-     * The JCE transformation for Cipher.getInstance()
+     * Java transformation for Cipher.getInstance()
+     *
+     * @return transformation : ex. "AES/GCM/NoPadding" or "ChaCha20-Poly1305"
      */
     public String transformation()
     {
@@ -103,7 +109,8 @@ public class CryptoConfig
 
     /**
      * Java name of the configured MAC, for Mac.getInstance()
-     * (null if no MAC is configured)
+     *
+     * @return name : ex. "HmacSHA256" or "AESCMAC", or null if there is no MAC
      */
     public String macJavaName()
     {
@@ -115,9 +122,10 @@ public class CryptoConfig
         return s.replaceAll("(?i)SHA-(1|224|256|384|512)$", "SHA$1");
     }
 
-     /**
-     * Proposed Cryptographic Configuration (PCC) sent in handshake message type 1,
-     * in the format (algorithm/mode/ivSize/padding).
+    /**
+     * Proposed cryptographic configuration (PCC) sent in handshake message 1
+     *
+     * @return pcc : algorithm/mode/ivSize/padding
      */
     public String proposal()
     {
@@ -126,18 +134,17 @@ public class CryptoConfig
     }
 
     /**
-     * Refuse configurations that cannot give the guarantees required by the
-     * assignment (the threat model asks to consider incorrect configurations).
+     * Refuse insecure or inconsistent configurations
      */
     private void validate() throws CryptoException
     {
         if (algorithm == null)
             throw new CryptoException("<Algorithm> is required");
-        if (symKeySize != 128 && symKeySize != 192 && symKeySize != 256)   // WA1 2.2.2: "128, 192 or 256 bits"
+        if (symKeySize != 128 && symKeySize != 192 && symKeySize != 256)
             throw new CryptoException("<Keysize> must be 128, 192 or 256 bits");
         if ("ECB".equalsIgnoreCase(mode))
             throw new CryptoException("ECB is not allowed: identical blocks give identical ciphertext");
-        if ("ChaCha20".equalsIgnoreCase(algorithm) && symKeySize != 256)   // ChaCha20 only has 256-bit keys
+        if ("ChaCha20".equalsIgnoreCase(algorithm) && symKeySize != 256)
             throw new CryptoException("ChaCha20 needs a 256-bit key (<Keysize> 256)");
         if (!isAEAD() && macAlgorithm == null)
             throw new CryptoException(transformation() + " gives no integrity: use an AEAD mode or configure a MAC");
@@ -145,14 +152,17 @@ public class CryptoConfig
             throw new CryptoException("<MACsuite> is configured but <MacKey> is NULL");
         if (macKey != null && java.util.Arrays.equals(macKey, symKey))
             throw new CryptoException("The MAC key must be different from the encryption key");
-        if ("CCM".equalsIgnoreCase(mode) && (ivSize < 56 || ivSize > 104 || ivSize % 8 != 0))   // WA1 7.3
+        if ("CCM".equalsIgnoreCase(mode) && (ivSize < 56 || ivSize > 104 || ivSize % 8 != 0))
             throw new CryptoException("CCM needs a nonce of 7 to 13 bytes (<IVSIZE> 56..104)");
         if (mode != null && ivSize == 0)
             throw new CryptoException("Mode " + mode + " needs an <IVSIZE>");
     }
-    // ------------------------------------------------------------- helpers
 
-    /** XML parser protected against XXE (no DOCTYPE / external entities in the config). */
+    /**
+     * XML parser protected against XXE (no DOCTYPE or external entities)
+     *
+     * @return parser : the configured XML parser
+     */
     private static DocumentBuilder secureParser() throws Exception
     {
         DocumentBuilderFactory f = DocumentBuilderFactory.newInstance();
@@ -163,9 +173,11 @@ public class CryptoConfig
     }
 
     /**
-     * First element named <tag> inside parent, IGNORING upper/lower case:
-     * the assignment writes <MACsuite> and </MACSuite>, and the reference test
-     * writes <IVSIZE>, so <MACSuite>, <MACsuite>, <IVSIZE>, <IVSize> are all accepted.
+     * First element with the given name inside parent, at any depth, ignoring case
+     *
+     * @param parent : element where to search
+     * @param tag : name of the element
+     * @return element : the first element found
      */
     private static Element child(Element parent, String tag) throws CryptoException
     {
@@ -176,25 +188,45 @@ public class CryptoConfig
         throw new CryptoException("Missing <" + tag + "> in config file");
     }
 
-    /** Text of an element; "NULL" or empty -> null. */
+    /**
+     * Text of an element ("NULL" or empty become null)
+     *
+     * @param parent : element where to search
+     * @param tag : name of the element
+     * @return text : the text, or null
+     */
     private static String text(Element parent, String tag) throws CryptoException
     {
         String v = child(parent, tag).getTextContent().trim();
         return (v.isEmpty() || v.equalsIgnoreCase("NULL")) ? null : v;
     }
 
+    /**
+     * Check that a required value is not NULL
+     *
+     * @param v : value read from the file
+     * @param tag : name of the element (for the error message)
+     * @return v : the same value
+     */
     private static String required(String v, String tag) throws CryptoException
     {
         if (v == null) throw new CryptoException("<" + tag + "> cannot be NULL");
         return v;
     }
 
-    /** Key/IV in hexadecimal or Base64; checks that the size matches the declared size. */
+    /**
+     * Decode a key or IV in hexadecimal or Base64 and check its size
+     *
+     * @param s : text to decode
+     * @param bits : declared size in bits
+     * @param tag : name of the element (for the error message)
+     * @return bytes : the decoded value
+     */
     private static byte[] decode(String s, int bits, String tag) throws CryptoException
     {
         byte[] b;
-        if (s.matches("([0-9a-fA-F]{2})+"))   // only hex digits -> hexadecimal
-            b = HexFormat.of().parseHex(s);   // as in Lab 3.2 AesCmacExample
+        if (s.matches("([0-9a-fA-F]{2})+"))   
+            b = HexFormat.of().parseHex(s); 
         else
         {
             try { b = Base64.getDecoder().decode(s); }
@@ -206,6 +238,12 @@ public class CryptoConfig
         return b;
     }
 
+    /**
+     * Write null values as "NULL"
+     *
+     * @param s : value
+     * @return text : the value, or "NULL"
+     */
     private static String n(String s)
     {
         return s == null ? "NULL" : s;

@@ -7,24 +7,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Sends and receives messages of the Secure Streaming Protocol (WA1 2.2.3) over
- * one TCP connection:   Header || Payload
- *
- *   Header (clear): version (2) || release (2) || type (1) || size of payload (4)
- *
- * As Lab 2 SendEncrypt / ReceiveDecrypt:
- *   DataOutputStream os = new DataOutputStream(s.getOutputStream());
- *   os.writeInt(ciphertext.length); os.write(ciphertext);
- *   DataInputStream is = new DataInputStream(s.getInputStream());
- *   ciphertext = new byte[is.readInt()]; is.read(ciphertext);
- *
- * Protected payloads use CryptoSuite (Passo 2) and SEQUENCE NUMBERS:
- *   Types 2, 3:  E( SEQ || body )           AAD = version || release || type
- *   Types 4, 5:  SEQ || E( body )           AAD = version || release || type || SEQ
- * The receiver accepts ONLY the next expected SEQ, so replayed, duplicated,
- * reordered, missing (dropped) or injected messages are detected (WA1 2.1).
- * The header fields are in the AAD, so they cannot be changed either
- * (e.g. a type 4 block cannot be turned into a type 5 end-of-stream).
+ * Sends and receives Secure Streaming Protocol messages (Header || Payload) over one TCP connection
  */
 public class SecureChannel
 {
@@ -32,34 +15,41 @@ public class SecureChannel
     private final DataOutputStream out;
     private final CryptoSuite suite;
 
-    // metrics (WA1 section 4): bytes really sent / received on the network
+    // metrics: bytes really sent / received on the network
     public long bytesSent = 0;
     public long bytesReceived = 0;
 
+    /**
+     * Create a secure channel over the streams of a TCP connection
+     *
+     * @param in : input stream of the connection
+     * @param out : output stream of the connection
+     * @param suite : cryptographic suite used to protect the messages
+     */
     public SecureChannel(InputStream in, OutputStream out, CryptoSuite suite)
     {
-        this.in = new DataInputStream(in);       // as ReceiveDecrypt
-        this.out = new DataOutputStream(out);    // as SendEncrypt
+        this.in = new DataInputStream(in);
+        this.out = new DataOutputStream(out);
         this.suite = suite;
     }
 
-    // =============================================================== Header || Payload
+    // Header || Payload
 
     /**
-     * Send one message: Header || Payload.
-     * The fields are written as SendEncrypt does (writeShort, writeByte, writeInt, write),
-     * into one buffer that is then sent at once: one TCP write per message, so no
-     * small separate packets (that could delay the video).
+     * Send one message (Header || Payload) in a single write
+     *
+     * @param type : message type
+     * @param payload : message payload
      */
     public void send(int type, byte[] payload) throws IOException
     {
-        ByteArrayOutputStream message = new ByteArrayOutputStream();   // as HttpUtil (base code)
+        ByteArrayOutputStream message = new ByteArrayOutputStream();   
         DataOutputStream os = new DataOutputStream(message);
         os.writeShort(Protocol.VERSION);
         os.writeShort(Protocol.RELEASE);
         os.writeByte(type);
-        os.writeInt(payload.length);            // as SendEncrypt: os.writeInt(ciphertext.length)
-        os.write(payload);                      //                 os.write(ciphertext)
+        os.writeInt(payload.length);           
+        os.write(payload);                      
 
         out.write(message.toByteArray());
         out.flush();
@@ -67,24 +57,24 @@ public class SecureChannel
     }
 
     /**
-     * Receive one message. An error alert (type 255) from the other side is
-     * thrown as AlertException; a wrong header as ProtocolException.
+     * Receive one message; an alert (type 255) is thrown as AlertException
+     *
+     * @return message : type and payload of the received message
      */
     public Message receive() throws IOException, ProtocolException, AlertException
     {
         int version = in.readUnsignedShort();
         int release = in.readUnsignedShort();
         int type    = in.readUnsignedByte();
-        int size    = in.readInt();            // as ReceiveDecrypt: is.readInt()
-
+        int size    = in.readInt();            
         if (version != Protocol.VERSION || release != Protocol.RELEASE)
             throw new ProtocolException(Protocol.ALERT_BAD_VERSION, "version " + version + ":" + release);
         if (size < 0 || size > Protocol.MAX_PAYLOAD)
             throw new ProtocolException(Protocol.ALERT_MALFORMED, "payload size " + size);
 
         byte[] payload = new byte[size];
-        in.readFully(payload);                 // ReceiveDecrypt uses is.read(), that may read
-                                               // LESS than asked: readFully reads all the bytes
+        in.readFully(payload);                 
+                                              
         bytesReceived += Protocol.HEADER_SIZE + size;
 
         if (type == Protocol.TYPE_255)
@@ -97,7 +87,12 @@ public class SecureChannel
         return new Message(type, payload);
     }
 
-    /** Receive one message that MUST be of the given type. */
+    /**
+     * Receive one message that must be of the given type
+     *
+     * @param expectedType : type the message must have
+     * @return message : the received message
+     */
     public Message receive(int expectedType) throws IOException, ProtocolException, AlertException
     {
         Message m = receive();
@@ -107,7 +102,12 @@ public class SecureChannel
         return m;
     }
 
-    /** Send an error alert (type 255): code (1 byte) || reason. In clear (there may be no shared key). */
+    /**
+     * Send an error alert (type 255): code || reason
+     *
+     * @param code : alert code
+     * @param reason : text describing the error
+     */
     public void sendAlert(int code, String reason)
     {
         try
@@ -117,20 +117,32 @@ public class SecureChannel
         }
         catch (IOException e)
         {
-            // the other side is already gone: nothing to do (as SendEncrypt: catch ... { })
+            // the other side is already gone: nothing to do 
         }
     }
 
-    // ===================================== Types 2, 3:  E( SEQ || body )
+    // Types 2, 3:  E( SEQ || body )
 
-    /** Encrypt SEQ || body and send it (handshake messages 2 and 3). */
+    /**
+     * Encrypt SEQ || body and send it (handshake messages 2 and 3)
+     *
+     * @param type : message type
+     * @param seq : sequence number
+     * @param body : data to send after the SEQ
+     */
     public void sendSeqInside(int type, long seq, byte[] body) throws IOException, CryptoException
     {
         byte[] plaintext = Utils.concat(Utils.longToBytes(seq), body);
         send(type, suite.encrypt(plaintext, aad(type)));
     }
 
-    /** Decrypt a type 2 / 3 message, check its SEQ and return the body. */
+    /**
+     * Decrypt a message 2 / 3 and check its SEQ
+     *
+     * @param m : received message
+     * @param expectedSeq : sequence number it must have
+     * @return body : decrypted data after the SEQ
+     */
     public byte[] openSeqInside(Message m, long expectedSeq) throws ProtocolException
     {
         byte[] plaintext = decrypt(m.payload, aad(m.type));
@@ -143,16 +155,28 @@ public class SecureChannel
         return body;
     }
 
-    // ===================================== Types 4, 5:  SEQ || E( body )
+    // Types 4, 5:  SEQ || E( body )
 
-    /** Send SEQ (clear) || E(body); the SEQ is also in the AAD (stream blocks 4 and 5). */
+    /**
+     * Send SEQ (clear) || E(body), with the SEQ in the AAD (stream messages 4 and 5)
+     *
+     * @param type : message type
+     * @param seq : sequence number
+     * @param body : data to encrypt
+     */
     public void sendSeqClear(int type, long seq, byte[] body) throws IOException, CryptoException
     {
         byte[] encrypted = suite.encrypt(body, aad(type, seq));
         send(type, Utils.concat(Utils.longToBytes(seq), encrypted));
     }
 
-    /** Check the clear SEQ FIRST (cheap rejection of replays), then decrypt the block. */
+    /**
+     * Check the clear SEQ first, then decrypt a message 4 / 5
+     *
+     * @param m : received message
+     * @param expectedSeq : sequence number it must have
+     * @return body : decrypted data
+     */
     public byte[] openSeqClear(Message m, long expectedSeq) throws ProtocolException
     {
         if (m.payload.length < 8)
@@ -164,9 +188,12 @@ public class SecureChannel
         return decrypt(encrypted, aad(m.type, seq));
     }
 
-    // =============================================================== helpers
-
-    /** AAD = version || release || type   (the header fields sent in clear). */
+    /**
+     * Build the AAD from the clear header fields: version || release || type
+     *
+     * @param type : message type
+     * @return aad : associated data
+     */
     private static byte[] aad(int type)
     {
         return new byte[] { (byte)(Protocol.VERSION >> 8), (byte) Protocol.VERSION,
@@ -174,12 +201,25 @@ public class SecureChannel
                             (byte) type };
     }
 
-    /** AAD = version || release || type || SEQ   (for blocks, where the SEQ goes in clear). */
+    /**
+     * Build the AAD for stream blocks: version || release || type || SEQ
+     *
+     * @param type : message type
+     * @param seq : sequence number sent in clear
+     * @return aad : associated data
+     */
     private static byte[] aad(int type, long seq)
     {
         return Utils.concat(aad(type), Utils.longToBytes(seq));
     }
 
+    /**
+     * Decrypt data; any failure becomes an INTEGRITY_FAILURE protocol error
+     *
+     * @param encrypted : data to decrypt
+     * @param aad : associated data
+     * @return plaintext : decrypted data
+     */
     private byte[] decrypt(byte[] encrypted, byte[] aad) throws ProtocolException
     {
         try
@@ -192,7 +232,12 @@ public class SecureChannel
         }
     }
 
-    /** Only the next expected sequence number is accepted. */
+    /**
+     * Accept only the next expected sequence number
+     *
+     * @param seq : received sequence number
+     * @param expectedSeq : expected sequence number
+     */
     private static void checkSeq(long seq, long expectedSeq) throws ProtocolException
     {
         if (seq != expectedSeq)

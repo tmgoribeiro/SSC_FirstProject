@@ -7,18 +7,19 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The "sender" writes a small session into a buffer 
- * 
- * 
- * Mallory changes the list of messages; the "receiver" reads them and must
- * accept the normal session and REJECT every attack.
- *
+ * Tests the protocol messages: a sender records a session, Mallory changes it,
+ * and the receiver must accept the normal session and reject every attack
  */
 public class ChannelTest
 {
     static CryptoConfig cfg;
     static long seqX;
 
+    /**
+     * Run all the tests with one configuration
+     *
+     * @param args : configuration file
+     */
     public static void main(String[] args) throws Exception
     {
         if (args.length != 1)
@@ -50,8 +51,12 @@ public class ChannelTest
         System.out.println(failures == 0 ? "ALL TESTS PASSED" : failures + " TEST(S) FAILED");
     }
 
-
-    /** The sender writes the messages into a buffer; returns them one by one. */
+    /**
+     * Record a small session: message 2, three blocks (type 4) and the END (type 5)
+     *
+     * @param seqX : initial sequence number
+     * @return messages : the recorded messages, one by one
+     */
     static List<byte[]> recordSession(long seqX) throws Exception
     {
         ByteArrayOutputStream wire = new ByteArrayOutputStream();
@@ -64,7 +69,12 @@ public class ChannelTest
         return split(wire.toByteArray());
     }
 
-    /** The receiver: what the Proxy will do. Returns null if accepted, else the reason. */
+    /**
+     * Read the messages as the proxy does
+     *
+     * @param messages : messages to read
+     * @return reason : null if accepted, otherwise why they were rejected
+     */
     static String receive(List<byte[]> messages)
     {
         ByteArrayOutputStream ignore = new ByteArrayOutputStream();
@@ -101,6 +111,14 @@ public class ChannelTest
         }
     }
 
+    /**
+     * Run one test and print OK / FAIL
+     *
+     * @param name : test name
+     * @param messages : messages given to the receiver
+     * @param mustAccept : true if they must be accepted, false if rejected
+     * @return failures : 0 if the test passed, 1 if not
+     */
     static int run(String name, List<byte[]> messages, boolean mustAccept)
     {
         String result = receive(messages);
@@ -110,10 +128,15 @@ public class ChannelTest
         return ok ? 0 : 1;
     }
 
-    // Mallory
+    // Mallory: changes the list of messages before the receiver reads them
 
-
-
+    /**
+     * Copy the chosen messages, in the given order
+     *
+     * @param s : session messages
+     * @param idx : indexes of the messages to copy
+     * @return messages : the new list
+     */
     static List<byte[]> list(List<byte[]> s, int... idx)
     {
         List<byte[]> r = new ArrayList<>();
@@ -121,7 +144,14 @@ public class ChannelTest
         return r;
     }
 
-    /** session message 0, then message i of the OTHER session, then the rest. */
+    /**
+     * Insert message i of another session after message 0
+     *
+     * @param s : session messages
+     * @param other : messages of the other session
+     * @param i : index of the message to inject
+     * @return messages : the new list
+     */
     static List<byte[]> list2(List<byte[]> s, List<byte[]> other, int i)
     {
         List<byte[]> r = list(s, 0);
@@ -130,7 +160,12 @@ public class ChannelTest
         return r;
     }
 
-    /** After dropping a block, Mallory rewrites the CLEAR SEQs so they look consecutive. */
+    /**
+     * Rewrite the clear SEQs so they look consecutive again
+     *
+     * @param s : messages to change
+     * @return messages : the same list, changed
+     */
     static List<byte[]> fixSeqs(List<byte[]> s)
     {
         long next = seqX + 2;
@@ -139,6 +174,14 @@ public class ChannelTest
         return s;
     }
 
+    /**
+     * Change the type of message i in the clear header
+     *
+     * @param s : session messages
+     * @param i : index of the message
+     * @param newType : new message type
+     * @return messages : the changed copy
+     */
     static List<byte[]> changeType(List<byte[]> s, int i, int newType)
     {
         List<byte[]> r = list(s, 0, 1, 2, 3, 4);
@@ -146,6 +189,14 @@ public class ChannelTest
         return r;
     }
 
+    /**
+     * Flip one bit of message i
+     *
+     * @param s : session messages
+     * @param i : index of the message
+     * @param pos : position of the byte to change
+     * @return messages : the changed copy
+     */
     static List<byte[]> flipBit(List<byte[]> s, int i, int pos)
     {
         List<byte[]> r = list(s, 0, 1, 2, 3, 4);
@@ -153,6 +204,14 @@ public class ChannelTest
         return r;
     }
 
+    /**
+     * Change the protocol release in the header of message i
+     *
+     * @param s : session messages
+     * @param i : index of the message
+     * @param release : new release number
+     * @return messages : the changed copy
+     */
     static List<byte[]> changeRelease(List<byte[]> s, int i, int release)
     {
         List<byte[]> r = list(s, 0, 1, 2, 3, 4);
@@ -161,6 +220,13 @@ public class ChannelTest
         return r;
     }
 
+    /**
+     * Put a huge payload size in the header of message i
+     *
+     * @param s : session messages
+     * @param i : index of the message
+     * @return messages : the changed copy
+     */
     static List<byte[]> hugeSize(List<byte[]> s, int i)
     {
         List<byte[]> r = list(s, 0, 1, 2, 3, 4);
@@ -168,6 +234,14 @@ public class ChannelTest
         return r;
     }
 
+    /**
+     * Cut the connection in the middle of message i
+     *
+     * @param s : session messages
+     * @param i : index of the message to cut
+     * @param keep : number of bytes of that message that are kept
+     * @return messages : messages 0 and 1, then the cut message
+     */
     static List<byte[]> truncate(List<byte[]> s, int i, int keep)
     {
         List<byte[]> r = list(s, 0, 1);
@@ -177,9 +251,12 @@ public class ChannelTest
         return r;
     }
 
-
-
-    /** Split the bytes of the "network" into messages, using the header size field. */
+    /**
+     * Split the bytes of the "network" into messages, using the size in each header
+     *
+     * @param wire : all the bytes sent
+     * @return messages : the messages, one by one
+     */
     static List<byte[]> split(byte[] wire) throws IOException
     {
         List<byte[]> r = new ArrayList<>();
@@ -198,6 +275,12 @@ public class ChannelTest
         return r;
     }
 
+    /**
+     * Join the messages back into one byte array
+     *
+     * @param l : messages
+     * @return wire : all the bytes, in order
+     */
     static byte[] join(List<byte[]> l)
     {
         ByteArrayOutputStream b = new ByteArrayOutputStream();
@@ -205,11 +288,25 @@ public class ChannelTest
         return b.toByteArray();
     }
 
+    /**
+     * Write a long (8 bytes, big-endian) into an array
+     *
+     * @param b : array to change
+     * @param off : position where to write
+     * @param v : value to write
+     */
     static void writeLong(byte[] b, int off, long v)
     {
         for (int i = 7; i >= 0; i--) { b[off + i] = (byte) v; v >>>= 8; }
     }
 
+    /**
+     * Write an int (4 bytes, big-endian) into an array
+     *
+     * @param b : array to change
+     * @param off : position where to write
+     * @param v : value to write
+     */
     static void writeInt(byte[] b, int off, int v)
     {
         for (int i = 3; i >= 0; i--) { b[off + i] = (byte) v; v >>>= 8; }

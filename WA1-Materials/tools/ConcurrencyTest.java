@@ -16,22 +16,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
- * Concurrency test (WA1 Step 5: "multiple concurrent Proxy instances requesting
- * different movies from the Stream Server. Verify that concurrent streaming sessions
- * operate correctly and independently").
- *
- * Each argument is one client "proxyPort:movie". The same set of downloads is run
- * twice: first one after the other (sequential), then all at the same time
- * (concurrent). Each body is checked against the original file (SHA-256), as the
- * Get-FileHash test of Passo 6.
- *
- * Use: java ConcurrencyTest <mediaDir> <port:movie> [<port:movie> ...]
- *   ex: java -cp tools/out ConcurrencyTest streamserver/media 8080:dante.mp4 8090:sintel.mp4 8091:caminandes.mp4
+ * Downloads several movies through the proxies, first one at a time and then all together, checking each one with SHA-256
  */
 public class ConcurrencyTest
 {
-    static ExecutorService pool = Executors.newCachedThreadPool();   // as the base code
+    static ExecutorService pool = Executors.newCachedThreadPool();
 
+    /**
+     * Run the sequential and the concurrent downloads and print the results
+     *
+     * @param args : media folder and one "port:movie" per client
+     */
     public static void main(String[] args) throws Exception
     {
         if (args.length < 2)
@@ -82,7 +77,15 @@ public class ConcurrencyTest
         System.exit(ok == clients.size() ? 0 : 1);
     }
 
-    /** One client: GET /video/<movie> on localhost:<port>, as a browser would do. */
+    /**
+     * Download one movie from a proxy and compare it with the original file
+     *
+     * @param id : client number
+     * @param client : proxy port and movie name
+     * @param media : folder with the original movies
+     * @param start : latch to start all clients together, or null
+     * @return line : result of the client (bytes, time, kB/s, hash OK or not)
+     */
     static String download(int id, String[] client, Path media, CountDownLatch start)
     {
         int port = Integer.parseInt(client[0]);
@@ -125,7 +128,12 @@ public class ConcurrencyTest
         }
     }
 
-    /** One CRLF-terminated line, byte by byte (as HttpUtil.readLine of the base code). */
+    /**
+     * Read one CRLF-terminated line, byte by byte
+     *
+     * @param in : stream to read from
+     * @return line : the line without CRLF
+     */
     static String readLine(InputStream in) throws IOException
     {
         ByteArrayOutputStream line = new ByteArrayOutputStream();

@@ -11,53 +11,53 @@ import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * Encryption / decryption of ONE message (one block of the stream), with the
- * cryptographic configuration read from the config file (WA1 2.2.4: not hard-coded).
- *
- * Format of an encrypted message:
- *   AEAD (AES/GCM, ChaCha20-Poly1305):   nonce || ciphertext+tag
- *   Others (AES/CTR, AES/CBC, ChaCha20): nonce || ciphertext || HMAC_K2(aad || nonce || ciphertext)
- *                                        (Encrypt-then-MAC, Lab 3.2: Ek1(M) || MACk2(Ek1(M)))
+ * Encrypts and decrypts one message with the configured cipher (AEAD or Encrypt-then-MAC)
  */
 public class CryptoSuite
 {
-    private static final int GCM_TAG_LENGTH = 128;   // bits, as SimpleGCMExample / AESGCM
-    private static final int INITIAL_COUNTER = 0;    // as ChaCha20.java (Lab 3.1)
+    private static final int GCM_TAG_LENGTH = 128;   // bits
+    private static final int INITIAL_COUNTER = 0;    // ChaCha20 initial block counter
 
     private final CryptoConfig cfg;
-    private final SecretKey key;                     // K1: encryption key  (<SKey>)
+    private final SecretKey key;                     
     private final SecureRandom random = new SecureRandom();
 
+    /**
+     * Create the suite for one configuration
+     *
+     * @param cfg : cryptographic configuration
+     */
     public CryptoSuite(CryptoConfig cfg)
     {
         this.cfg = cfg;
-        this.key = new SecretKeySpec(cfg.symKey, cfg.algorithm);   // as KeyRing.readSecretKey()
+        this.key = new SecretKeySpec(cfg.symKey, cfg.algorithm);  
     }
 
     /**
-     * Encrypt one message (as SimpleGCMExample.encrypt).
-     * aad: data sent in clear (e.g. the header) that must also be protected.
+     * Encrypt one message: nonce || ciphertext (|| MAC if not AEAD)
+     *
+     * @param plaintext : data to encrypt
+     * @param aad : associated data (authenticated, not encrypted)
+     * @return encrypted : nonce, ciphertext and tag/MAC
      */
     public byte[] encrypt(byte[] plaintext, byte[] aad) throws CryptoException
     {
         try
         {
-            // random nonce, NEW for each message ("Never reuse an IV/key pair", AESGCM)
+            // random nonce, new for each message (never reuse a nonce with the same key)
             byte[] nonce = new byte[cfg.ivSize / 8];
             random.nextBytes(nonce);
 
             Cipher cipher = Cipher.getInstance(cfg.transformation());
             cipher.init(Cipher.ENCRYPT_MODE, key, paramSpec(nonce));
             if (cfg.isAEAD())
-                cipher.updateAAD(aad);                               // as SimpleCCMExample
+                cipher.updateAAD(aad);                              
             byte[] ciphertext = cipher.doFinal(plaintext);
 
-            // prepend nonce to ciphertext (needed for decryption)  -- SimpleGCMExample
             byte[] result = concat(nonce, ciphertext);
 
-            // not AEAD: Encrypt-then-MAC with the second key (K2)
             if (!cfg.isAEAD())
-                result = concat(result, hmac(aad, result));
+                result = concat(result, hmac(aad, result));      // Encrypt-then-MAC
             return result;
         }
         catch (GeneralSecurityException e)
@@ -66,10 +66,12 @@ public class CryptoSuite
         }
     }
 
-        /**
-     * Decrypt one message (as SimpleGCMExample.decrypt).
-     * Any modification of the message, its nonce, its tag/MAC or the aad is detected:
-     * always the same error message, to give no hints to an attacker.
+    /**
+     * Decrypt one message; any change to the data, nonce, tag/MAC or aad is detected
+     *
+     * @param encrypted : nonce, ciphertext and tag/MAC
+     * @param aad : associated data used when encrypting
+     * @return plaintext : decrypted data
      */
     public byte[] decrypt(byte[] encrypted, byte[] aad) throws CryptoException
     {
@@ -77,8 +79,7 @@ public class CryptoSuite
         {
             byte[] data = encrypted;
 
-            // not AEAD: check the HMAC FIRST, and only then decrypt
-            if (!cfg.isAEAD())
+            if (!cfg.isAEAD())                                   // verify the MAC before decrypting
             {
                 int macLen = Mac.getInstance(cfg.macJavaName()).getMacLength();
                 if (encrypted.length < macLen)
@@ -91,7 +92,7 @@ public class CryptoSuite
                     throw new CryptoException("Message integrity/authenticity check failed");
             }
 
-            // split nonce || ciphertext  -- SimpleGCMExample
+            // split nonce || ciphertext  
             byte[] nonce = new byte[cfg.ivSize / 8];
             if (data.length < nonce.length)
                 throw new CryptoException("Message integrity/authenticity check failed");
@@ -102,30 +103,40 @@ public class CryptoSuite
             Cipher cipher = Cipher.getInstance(cfg.transformation());
             cipher.init(Cipher.DECRYPT_MODE, key, paramSpec(nonce));
             if (cfg.isAEAD())
-                cipher.updateAAD(aad);                               // must match encrypt side
-            return cipher.doFinal(ciphertext);                       // AEAD: Java verifies the tag
+                cipher.updateAAD(aad);                               
+            return cipher.doFinal(ciphertext);                       // AEAD: the tag is verified here
         }
-        catch (GeneralSecurityException e)                           // e.g. AEADBadTagException
+        catch (GeneralSecurityException e)                           
         {
             throw new CryptoException("Message integrity/authenticity check failed");
         }
     }
 
-
-    /** Parameters for cipher.init, as in each Lab example. */
+    /**
+     * Parameters for cipher.init, according to the mode
+     *
+     * @param nonce : nonce / IV of the message
+     * @return spec : GCM/CCM (128-bit tag), ChaCha20 or IV parameters
+     */
     private AlgorithmParameterSpec paramSpec(byte[] nonce)
     {
         String t = cfg.transformation();
         if (t.contains("/GCM/"))
-            return new GCMParameterSpec(GCM_TAG_LENGTH, nonce);       // SimpleGCMExample
+            return new GCMParameterSpec(GCM_TAG_LENGTH, nonce);       
         if (t.contains("/CCM/"))                                    
-            return new GCMParameterSpec(GCM_TAG_LENGTH, nonce);       // its TAG_LENGTH = 128 (IvParameterSpec gives 64)
+            return new GCMParameterSpec(GCM_TAG_LENGTH, nonce);       // 128-bit tag (IvParameterSpec gives 64)
         if (t.equals("ChaCha20"))
-            return new ChaCha20ParameterSpec(nonce, INITIAL_COUNTER); // ChaCha20.java
-        return new IvParameterSpec(nonce);   // CBC, CTR (SimpleCBC/CTRExample), ChaCha20-Poly1305
+            return new ChaCha20ParameterSpec(nonce, INITIAL_COUNTER);
+        return new IvParameterSpec(nonce);  
     }
 
-    /** HMAC of aad || data with the MAC key K2 (as HmacExample.hmac). */
+    /**
+     * MAC (HMAC or CMAC) of aad || data with the MAC key
+     *
+     * @param aad : associated data
+     * @param data : nonce || ciphertext
+     * @return mac : the computed MAC
+     */
     private byte[] hmac(byte[] aad, byte[] data) throws GeneralSecurityException
     {
         Mac mac = Mac.getInstance(cfg.macJavaName());
@@ -134,13 +145,27 @@ public class CryptoSuite
         return mac.doFinal(data);
     }
 
-    /** Verify a received HMAC using a constant-time comparison (as HmacExample.verify). */
+    /**
+     * Verify a received MAC with a constant-time comparison
+     *
+     * @param aad : associated data
+     * @param data : nonce || ciphertext
+     * @param receivedMac : MAC received with the message
+     * @return valid : true if the MAC is correct
+     */
     private boolean verify(byte[] aad, byte[] data, byte[] receivedMac) throws GeneralSecurityException
     {
         byte[] expected = hmac(aad, data);
         return MessageDigest.isEqual(expected, receivedMac);
     }
 
+    /**
+     * Concatenate two byte arrays
+     *
+     * @param a : first array
+     * @param b : second array
+     * @return result : a || b
+     */
     private static byte[] concat(byte[] a, byte[] b)
     {
         byte[] result = new byte[a.length + b.length];

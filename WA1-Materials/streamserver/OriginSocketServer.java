@@ -10,29 +10,24 @@ import java.nio.file.Paths;
 import java.util.concurrent.Executors;
 
 /**
- * Origin server implemented with raw sockets only (java.net.ServerSocket / Socket),
- * no com.sun.net.httpserver, no external libraries. Serves files under mediaDir at
- * GET /media/<file>, honouring a single "Range: bytes=start-end" header so seeking
- * works. Each connection handles exactly one request, then closes (Connection: close) -
- * that keeps the hand-written HTTP parsing simple.
+ * Secure Stream Server: answers the handshake of the proxy and sends the requested movie as encrypted blocks (Type 4) ending with an END (Type 5)
  *
- * WA1 (Secure Stream Server): the HTTP request from the proxy is replaced by the
- * handshake of the Secure Streaming Protocol (types 1, 2, 3), and the response
- * (the same HTTP headers + body as before) is sent through a SecureOutputStream:
- * every block becomes an encrypted Type 4 message, and the end a Type 5 message.
- * The cryptographic configuration is read from sservercrypto.config.
- *
- * Usage: java OriginSocketServer [port=8081] [mediaDir=media] [config=sservercrypto.config] */
+ */
 public class OriginSocketServer {
 
     static final int BLOCK_SIZE = 1024;
     
-    static CryptoConfig cfg;                                                    
+    static CryptoConfig cfg;                                                    // WA1
 
+    /**
+     * Start the server and handle each proxy connection in its own thread
+     *
+     * @param args : [port] [mediaDir] [config file]
+     */
     public static void main(String[] args) throws Exception {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 8081;
         Path root = Paths.get(args.length > 1 ? args[1] : "media").toAbsolutePath().normalize();
-        cfg = CryptoConfig.load(args.length > 2 ? args[2] : "sservercrypto.config");   // 
+        cfg = CryptoConfig.load(args.length > 2 ? args[2] : "sservercrypto.config");   // WA1 (read + validate)
 
         try (ServerSocket server = new ServerSocket(port)) {
             System.out.println("Origin server on http://localhost:" + port + "/media/<file.mp4>  (dir: " + root + ")");
@@ -45,7 +40,13 @@ public class OriginSocketServer {
         }
     }
 
-        static void handle(Socket socket, Path root) {
+    /**
+     * Handle one proxy connection: handshake, then the movie through the secure stream
+     *
+     * @param socket : connection with the proxy
+     * @param root : folder with the movies
+     */
+    static void handle(Socket socket, Path root) {
         try (socket) {
             var in = socket.getInputStream();
             var out = socket.getOutputStream();
@@ -55,7 +56,7 @@ public class OriginSocketServer {
             try {
                 Handshake.Result r = Handshake.server(ch, cfg);
 
-                // WA1 (extension): MEDIA = movie name || "\r\n" || Range header of the browser (empty if none)
+                // WA1: MEDIA = movie name || "\r\n" || Range header of the browser (empty if none)
                 String[] media = r.media.split("\r\n", -1);
                 String name = media[0];
                 String rangeHeader = (media.length > 1 && !media[1].isEmpty()) ? media[1] : null;
@@ -74,7 +75,7 @@ public class OriginSocketServer {
                 }
             } catch (ProtocolException e) {                                 // WA1
                 System.out.println("Error: " + e.getMessage());
-                ch.sendAlert(e.alert, e.getMessage());          // "notified with an alert-error message"
+                ch.sendAlert(e.alert, e.getMessage());                      // notify the proxy with an alert
             } catch (AlertException | CryptoException e) {                  // WA1
                 System.out.println("Error: " + e.getMessage());
             }
@@ -83,6 +84,13 @@ public class OriginSocketServer {
         }
     }
 
+    /**
+     * Send a movie (all of it or the requested Range) as HTTP headers + body, block by block
+     *
+     * @param out : output stream (the secure stream)
+     * @param file : movie to send
+     * @param rangeHeader : Range requested by the browser, or null
+     */
     static void serveFile(OutputStream out, Path file, String rangeHeader) throws IOException {
         long size = Files.size(file);
         long start = 0, end = size - 1;
@@ -130,10 +138,28 @@ public class OriginSocketServer {
         }
     }
 
+    /**
+     * Send an HTTP response with only the status line and headers
+     *
+     * @param out : output stream
+     * @param code : HTTP status code
+     * @param reason : HTTP reason phrase
+     * @param contentLength : value of Content-Length
+     */
     static void writeStatus(OutputStream out, int code, String reason, long contentLength) throws IOException {
         writeHeaders(out, code, reason, contentLength, null, null);
     }
 
+    /**
+     * Send the HTTP status line and headers
+     *
+     * @param out : output stream
+     * @param code : HTTP status code
+     * @param reason : HTTP reason phrase
+     * @param contentLength : value of Content-Length
+     * @param contentType : value of Content-Type, or null
+     * @param extraHeaders : more header lines, or null
+     */
     static void writeHeaders(OutputStream out, int code, String reason, long contentLength,
                               String contentType, String extraHeaders) throws IOException {
         StringBuilder sb = new StringBuilder();

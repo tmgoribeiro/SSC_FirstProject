@@ -1,16 +1,13 @@
 /**
- * Constants of the Secure Streaming Protocol.
- *
- * Every message:   Header || Payload
- *
-*/
+ * Constants of the Secure Streaming Protocol (every message: Header || Payload)
+ */
 public class Protocol
 {
-    // HS Version:Release
+    // Version:Release
     public static final int VERSION = 1;
     public static final int RELEASE = 1;
 
-    // HS message types
+    // Message types
     public static final int TYPE_1   = 1;     // first message of the handshake  (Proxy -> Server)
     public static final int TYPE_2   = 2;     // second message of the handshake (Server -> Proxy)
     public static final int TYPE_3   = 3;     // third message of the handshake  (Proxy -> Server)
@@ -18,7 +15,7 @@ public class Protocol
     public static final int TYPE_5   = 5;     // last block of the stream        (Server -> Proxy)
     public static final int TYPE_255 = 255;   // error alert
 
-    public static final int HEADER_SIZE = 2 + 2 + 1 + 4;   // bytes
+    public static final int HEADER_SIZE = 2 + 2 + 1 + 4;   // version, release, type, size (bytes)
 
     // Largest payload accepted
     public static final int MAX_PAYLOAD = 1024 * 1024;
@@ -29,10 +26,16 @@ public class Protocol
     public static final int ALERT_MALFORMED          = 3;  // payload cannot be parsed / wrong size
     public static final int ALERT_INTEGRITY          = 4;  // decryption / tag / MAC check failed
     public static final int ALERT_BAD_SEQUENCE       = 5;  // replayed, duplicated, reordered or missing message
-    public static final int ALERT_CONFIG_REJECTED    = 6;  // proposed configuration not compatible (Passo 4)
-    public static final int ALERT_BAD_CHALLENGE      = 7;  // wrong response R to SRV (Passo 4)
-    public static final int ALERT_MEDIA_NOT_FOUND    = 8;  // requested movie does not exist (Passo 5)
+    public static final int ALERT_CONFIG_REJECTED    = 6;  // proposed configuration not compatible
+    public static final int ALERT_BAD_CHALLENGE      = 7;  // wrong response R to SRV
+    public static final int ALERT_MEDIA_NOT_FOUND    = 8;  // not used: a missing movie gets an HTTP 404 inside the stream
 
+    /**
+     * Name of an alert code
+     *
+     * @param code : alert code
+     * @return name : ex. "INTEGRITY_FAILURE"
+     */
     public static String alertName(int code)
     {
         switch (code)

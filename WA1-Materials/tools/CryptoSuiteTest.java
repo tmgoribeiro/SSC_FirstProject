@@ -2,15 +2,7 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 
 /**
- * Tests CryptoSuite with one or more config files. Sender and receiver use the
- * same config file (= same keys), as the Proxy and the Server will do.
- *
- *  1. Round-trip: decrypt(encrypt(m)) == m, for several message sizes
- *  2. Fresh nonce: encrypting the same message twice gives different results
- *  3. Mallory (MiM), as in Lab 3.1 TamperingExample: flips a digit of the
- *     ciphertext ("Transfer 0000100" -> "Transfer 9000100") -> must be REJECTED
- *  4. Every single bit flipped, changed AAD, truncated message -> all REJECTED
- *  5. Size added to a 1024-byte block (for the report)
+ * Tests the encryption of each configuration: round-trip, fresh nonce, tampering rejected and bytes added per block
  *
  * Use: java CryptoSuiteTest <config file> ...
  */
@@ -18,6 +10,11 @@ public class CryptoSuiteTest
 {
     static SecureRandom random = new SecureRandom();
 
+    /**
+     * Run the tests for every configuration file
+     *
+     * @param args : configuration files
+     */
     public static void main(String[] args) throws Exception
     {
         if (args.length == 0)
@@ -46,7 +43,7 @@ public class CryptoSuiteTest
 
             try
             {
-                // 1 + 2 + 4
+                // 1. round-trip, 2. fresh nonce, 4. every change rejected
                 boolean roundTrip = true, freshNonce = true, allRejected = true;
                 for (int size : new int[] { 0, 1, 15, 16, 17, 1023, 1024 })
                 {
@@ -68,7 +65,7 @@ public class CryptoSuiteTest
                     allRejected &= rejected(receiver, Arrays.copyOf(c1, c1.length - 1), aad); // truncated
                 }
 
-                // 3. Mallory, as in TamperingExample
+                // 3. Mallory changes one digit of the ciphertext
                 String input = "Transfer 0000100 to AC 1234-5678";
                 byte[] aad = "header".getBytes();
                 byte[] sent = sender.encrypt(input.getBytes(), aad);
@@ -105,6 +102,14 @@ public class CryptoSuiteTest
         System.out.println(failures == 0 ? "ALL TESTS PASSED" : failures + " CONFIG(S) FAILED");
     }
 
+    /**
+     * Check that a message is rejected by the receiver
+     *
+     * @param s : crypto suite of the receiver
+     * @param msg : encrypted message
+     * @param aad : associated data
+     * @return rejected : true if decryption failed
+     */
     static boolean rejected(CryptoSuite s, byte[] msg, byte[] aad)
     {
         try
@@ -118,6 +123,12 @@ public class CryptoSuiteTest
         }
     }
 
+    /**
+     * Generate random bytes
+     *
+     * @param n : number of bytes
+     * @return bytes : random array
+     */
     static byte[] randomBytes(int n)
     {
         byte[] b = new byte[n];

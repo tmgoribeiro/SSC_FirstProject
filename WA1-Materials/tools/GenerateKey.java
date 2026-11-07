@@ -1,6 +1,6 @@
 /**
  * Material/Labs for SRSC 21/22, Sem-1
- * hj
+ * 
  **/
 
 // GenerateKey.java
@@ -10,15 +10,17 @@ import java.util.Base64;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 
+/**
+ * Generates a random secret key and prints it in hexadecimal and Base64
+ *
+ * Use: java GenerateKey <algorithm> <keysize in bits>
+ */
 public class GenerateKey {
 
   /**
-   * main()
-   * Use: java GenerateKey <algorithm> <keysize in bits>
-   *   ex: java GenerateKey AES 256         (Lab 2)
-   *       java GenerateKey ChaCha20 256    (Lab 3.1 / 3.2)
-   *       java GenerateKey HmacSHA256 256  (MAC key)
-   *       java GenerateKey RANDOM 256      (SecureRandom bytes, as HmacExample)
+   * Generate one key with KeyGenerator, or random bytes with RANDOM
+   *
+   * @param args : algorithm (ex. AES, ChaCha20, HmacSHA256 or RANDOM) and key size in bits
    */
   public static void main(String[] args) throws Exception {
 
@@ -36,19 +38,19 @@ public class GenerateKey {
     byte[] keyBytes;
 
     if (ALGORITHM.equalsIgnoreCase("RANDOM")) {
-      // As in HmacExample (Lab 3.2): byte[] key = new byte[32]; new SecureRandom().nextBytes(key);
+      // random bytes from SecureRandom
       keyBytes = new byte[KEYSIZE / 8];
       new SecureRandom().nextBytes(keyBytes);
     }
     else {
-      // Key generation for the chosen Alg. (as in Lab 2 GenerateKey)
+      // key generator of the chosen algorithm
       KeyGenerator kg = KeyGenerator.getInstance(ALGORITHM);
       kg.init(KEYSIZE);
       SecretKey key = kg.generateKey();
       keyBytes = key.getEncoded();
     }
 
-    // Print it (as hjCipherTest): copy the SAME value to both config files
+    // print it: copy the SAME value to both config files (proxy and server)
     System.out.println("----------------------------------------------");
     System.out.println("Key " + ALGORITHM + " with " + KEYSIZE + " bits");
     System.out.println("Key in Hex:\n" + Utils.toHex(keyBytes));
@@ -57,8 +59,3 @@ public class GenerateKey {
     System.out.println("----------------------------------------------");
   }
 }
-
-
-
-
-

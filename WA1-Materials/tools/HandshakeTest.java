@@ -14,20 +14,20 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Tests the handshake (messages 1, 2, 3 and alerts) with real TCP sockets on
- * localhost (as Lab 2 EncryptedSendReceive: ServerSocket / Socket), and with a
- * Man-in-the-Middle "Mallory" relay between Proxy and Server that can modify,
- * replay or reorder handshake messages (WA1 threat model, section 3).
+ * Tests the handshake over real sockets, with a Mallory relay that changes, replays or reorders messages
  *
  * Use: java HandshakeTest <proxy config> <server config> <other config>
- *   proxy config and server config: a compatible pair (same configuration and keys)
- *   other config: a DIFFERENT configuration (to test incompatible proposals)
  */
 public class HandshakeTest
 {
     static ExecutorService pool = Executors.newCachedThreadPool();
     static int failures = 0;
 
+    /**
+     * Run the 7 handshake tests
+     *
+     * @param args : proxy config, server config (same as the proxy) and a different config
+     */
     public static void main(String[] args) throws Exception
     {
         if (args.length != 3)
@@ -81,9 +81,15 @@ public class HandshakeTest
         System.exit(failures == 0 ? 0 : 1);
     }
 
-    // ------------------------------------------------------------- Proxy and Server
+    // Proxy and Server
 
-    /** The Server side: accepts one connection and runs Handshake.server. */
+    /**
+     * Server side: accept one connection and run the server handshake
+     *
+     * @param ss : server socket
+     * @param cfg : server configuration
+     * @return result : "OK ..." or the error seen by the server
+     */
     static String serverSide(ServerSocket ss, CryptoConfig cfg)
     {
         try (Socket s = ss.accept())
@@ -96,7 +102,7 @@ public class HandshakeTest
             }
             catch (ProtocolException e)
             {
-                ch.sendAlert(e.alert, e.getMessage());          // "notified with an alert-error message"
+                ch.sendAlert(e.alert, e.getMessage());          // notify the other side
                 return e.getMessage() + " -> alert sent";
             }
         }
@@ -110,7 +116,13 @@ public class HandshakeTest
         }
     }
 
-    /** The Proxy side: connects and runs Handshake.proxy for "dante.mp4". */
+    /**
+     * Proxy side: connect and run the proxy handshake for "dante.mp4"
+     *
+     * @param port : port to connect to (server or Mallory)
+     * @param cfg : proxy configuration
+     * @return result : "OK ..." or the error seen by the proxy
+     */
     static String proxySide(int port, CryptoConfig cfg)
     {
         try (Socket s = new Socket("localhost", port))
@@ -137,10 +149,22 @@ public class HandshakeTest
         }
     }
 
-    // ------------------------------------------------------------- tests
+    // Tests
 
+    /** What Mallory does to each message sent by the proxy */
     interface Tamper { byte[] apply(int index, byte[] message); }
 
+    /**
+     * Run one handshake between proxy and server, optionally through Mallory
+     *
+     * @param name : test name
+     * @param proxyCfg : proxy configuration
+     * @param serverCfg : server configuration
+     * @param mallory : change applied to the proxy messages, or null (direct connection)
+     * @param mustSucceed : true if the handshake must succeed
+     * @param proxyExpect : text expected in the proxy result
+     * @param serverExpect : text expected in the server result
+     */
     static void test(String name, CryptoConfig proxyCfg, CryptoConfig serverCfg, Tamper mallory,
                      boolean mustSucceed, String proxyExpect, String serverExpect) throws Exception
     {
@@ -162,7 +186,13 @@ public class HandshakeTest
         }
     }
 
-    /** Mallory connects to the server and replays messages 1 and 3 recorded in test 1. */
+    /**
+     * Mallory replays the old messages 1 and 3 to a new server session
+     *
+     * @param name : test name
+     * @param serverCfg : server configuration
+     * @param recorded : messages recorded in test 1
+     */
     static void replayTest(String name, CryptoConfig serverCfg, List<byte[]> recorded) throws Exception
     {
         try (ServerSocket server = new ServerSocket(0))
@@ -182,7 +212,13 @@ public class HandshakeTest
         }
     }
 
-    /** Mallory connects to the server and sends message 3 as the first message. */
+    /**
+     * Mallory sends message 3 as the first message
+     *
+     * @param name : test name
+     * @param serverCfg : server configuration
+     * @param recorded : messages recorded in test 1
+     */
     static void outOfOrderTest(String name, CryptoConfig serverCfg, List<byte[]> recorded) throws Exception
     {
         try (ServerSocket server = new ServerSocket(0))
@@ -198,6 +234,14 @@ public class HandshakeTest
         }
     }
 
+    /**
+     * Print the result of one test
+     *
+     * @param name : test name
+     * @param ok : true if the test passed
+     * @param proxyResult : what the proxy saw
+     * @param serverResult : what the server saw
+     */
     static void report(String name, boolean ok, String proxyResult, String serverResult)
     {
         System.out.println((ok ? "OK   " : "FAIL ") + name);
@@ -206,9 +250,15 @@ public class HandshakeTest
         if (!ok) failures++;
     }
 
-    // ------------------------------------------------------------- Mallory (relay)
+    // Mallory (relay)
 
-    /** Forwards Proxy -> Server message by message (applying 'mallory'), Server -> Proxy as is. */
+    /**
+     * Relay proxy -> server message by message (applying Mallory's change), server -> proxy as is
+     *
+     * @param relay : socket where Mallory waits for the proxy
+     * @param serverPort : port of the server
+     * @param mallory : change applied to each proxy message
+     */
     static void relay(ServerSocket relay, int serverPort, Tamper mallory)
     {
         try (Socket fromProxy = relay.accept(); Socket toServer = new Socket("localhost", serverPort))
@@ -229,6 +279,13 @@ public class HandshakeTest
         }
     }
 
+    /**
+     * Copy all bytes from one stream to another
+     *
+     * @param in : source stream
+     * @param out : destination stream
+     * @return null : (for use as a task)
+     */
     static Void copy(InputStream in, OutputStream out) throws IOException
     {
         byte[] buf = new byte[4096];
@@ -241,7 +298,12 @@ public class HandshakeTest
         return null;
     }
 
-    /** Reads one whole message (Header || Payload) as bytes. */
+    /**
+     * Read one whole message (Header || Payload) as bytes
+     *
+     * @param in : stream to read from
+     * @return message : header and payload
+     */
     static byte[] readMessage(DataInputStream in) throws IOException
     {
         byte[] header = new byte[Protocol.HEADER_SIZE];

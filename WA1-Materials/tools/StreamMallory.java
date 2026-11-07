@@ -11,32 +11,20 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Mallory, a Man-in-the-Middle between the Secure Proxy and the Secure Stream Server
- * (WA1 threat model, section 3: "an attacker can eavesdrop on, modify, inject, replay,
- * reorder, or drop messages"). The proxy is started with originPort = Mallory's port:
+ * Man-in-the-middle between the proxy and the server that listens to the stream or attacks block N
  *
- *   Server :  java -cp out OriginSocketServer 8081 media
- *   Mallory:  java -cp tools/out StreamMallory 8082 localhost 8081 <attack>
- *   Proxy  :  java -cp out ProxySocketServer 8080 localhost 8082
- *
- * Server -> Proxy messages are relayed one by one (Header || Payload, as HandshakeTest);
- * the attack is applied to stream block number N (the N-th Type 4 message, default 50).
- * Attacks:
- *   none      only relays (the stream must arrive COMPLETE)
- *   eavesdrop only listens, and looks for plaintext in both directions: movie name,
- *             HTTP request/response, MP4 "ftyp" (also works against the insecure base code)
- *   flip      changes one byte of the encrypted block (as TamperingExample: ^= '0' ^ '9')
- *   drop      removes block N                      (missing block)
- *   dup       sends block N twice                  (replayed / duplicated block)
- *   swap      sends block N+1 before block N       (reordered blocks)
- *   type      changes Type 4 into Type 5 in the clear header (fake end of stream)
- *   inject    inserts a forged block (next SEQ, random "ciphertext")
- *   cut       removes the Type 5 END message       (truncated stream)
+ * Use: java StreamMallory <port> <serverHost> <serverPort> <attack> [N=50]
+ *      attack: none | eavesdrop | flip | drop | dup | swap | type | inject | cut
  */
 public class StreamMallory
 {
-    static ExecutorService pool = Executors.newCachedThreadPool();   // as the base code
+    static ExecutorService pool = Executors.newCachedThreadPool();
 
+    /**
+     * Wait for proxy connections and relay each one to the server with the chosen attack
+     *
+     * @param args : Mallory port, server host, server port, attack and block number N
+     */
     public static void main(String[] args) throws Exception
     {
         if (args.length < 4)
@@ -63,6 +51,15 @@ public class StreamMallory
         }
     }
 
+    /**
+     * Relay one session, applying the attack to the server -> proxy messages
+     *
+     * @param proxy : connection with the proxy
+     * @param serverHost : host of the server
+     * @param serverPort : port of the server
+     * @param attack : attack to apply
+     * @param n : number of the attacked block
+     */
     static void relay(Socket proxy, String serverHost, int serverPort, String attack, int n)
     {
         try (proxy; Socket origin = new Socket(serverHost, serverPort))
@@ -97,7 +94,7 @@ public class StreamMallory
                             switch (attack)
                             {
                                 case "flip" -> {
-                                    m[m.length - 20] ^= '0' ^ '9';                 // as TamperingExample
+                                    m[m.length - 20] ^= '0' ^ '9';                 // change one encrypted byte
                                     System.out.println("Mallory: changed one byte of block " + n);
                                 }
                                 case "drop" -> {
@@ -154,7 +151,12 @@ public class StreamMallory
         }
     }
 
-    /** Can Mallory read anything? (the insecure base code sends all of this in clear) */
+    /**
+     * Print whether Mallory can read anything in clear
+     *
+     * @param fromProxy : bytes seen from the proxy
+     * @param fromServer : bytes seen from the server (first 1 MB)
+     */
     static void eavesdrop(byte[] fromProxy, byte[] fromServer)
     {
         System.out.println("Mallory listened to " + fromProxy.length + " bytes Proxy->Server and "
@@ -166,12 +168,27 @@ public class StreamMallory
         look("MP4 signature \"ftyp\"   (Server->Proxy)", fromServer, "ftyp");
     }
 
+    /**
+     * Print whether a text appears in the captured bytes
+     *
+     * @param what : description of what is searched
+     * @param data : captured bytes
+     * @param text : text to search
+     */
     static void look(String what, byte[] data, String text)
     {
         String s = new String(data, StandardCharsets.ISO_8859_1);
         System.out.println("   " + what + ": " + (s.contains(text) ? "FOUND (in clear!)" : "not found"));
     }
 
+    /**
+     * Copy all bytes from one stream to another, keeping a copy of the first 1 MB
+     *
+     * @param in : source stream
+     * @param out : destination stream
+     * @param seen : where the copy is kept
+     * @return null : (for use as a task)
+     */
     static Void copy(InputStream in, OutputStream out, ByteArrayOutputStream seen)
     {
         byte[] buf = new byte[4096];
@@ -189,7 +206,12 @@ public class StreamMallory
         return null;
     }
 
-    /** Reads one whole message (Header || Payload) as bytes (as HandshakeTest). */
+    /**
+     * Read one whole message (Header || Payload) as bytes
+     *
+     * @param in : stream to read from
+     * @return message : header and payload
+     */
     static byte[] readMessage(DataInputStream in) throws IOException
     {
         byte[] header = new byte[Protocol.HEADER_SIZE];

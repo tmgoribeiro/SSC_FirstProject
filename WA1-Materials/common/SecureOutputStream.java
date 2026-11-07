@@ -4,24 +4,33 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 
 /**
- * The Stream Server writes the movie to this stream instead of the socket
- * (so the provided serveFile / writeHeaders stay unchanged):
- *   each write(...)  -> message Type 4:  SEQB || E( block )
- *   close()          -> message Type 5:  SEQF || E( SEQF || "END" || random string )
- * (WA1 2.2.3). SEQB starts at SEQZ + 1 (returned by the handshake).
+ * Stream written by the Stream Server instead of the socket: each write is sent
+ * as an encrypted block (type 4) and close() sends the END (type 5)
  */
 public class SecureOutputStream extends OutputStream
 {
     private final SecureChannel ch;
-    private long seq;
+    private long seq;                               // sequence number of the next block
 
+    /**
+     * Create the stream for one session
+     *
+     * @param ch : secure channel to the proxy
+     * @param firstBlockSeq : sequence number of the first block
+     */
     public SecureOutputStream(SecureChannel ch, long firstBlockSeq)
     {
         this.ch = ch;
         this.seq = firstBlockSeq;
     }
 
-    /** One block of serveFile (out.write(block, 0, n)) -> Type 4: SEQB || E( block ) */
+    /**
+     * Send one block as a type 4 message: SEQB || E(block)
+     *
+     * @param b : data to send
+     * @param off : position of the block in b
+     * @param len : size of the block
+     */
     @Override
     public void write(byte[] b, int off, int len) throws IOException
     {
@@ -30,13 +39,20 @@ public class SecureOutputStream extends OutputStream
         send(Protocol.TYPE_4, seq++, block);
     }
 
+    /**
+     * Send one byte as a block
+     *
+     * @param b : byte to send
+     */
     @Override
     public void write(int b) throws IOException
     {
         write(new byte[] { (byte) b }, 0, 1);
     }
 
-    /** End of the stream -> Type 5: SEQF || E( SEQF || "END" || random string ) */
+    /**
+     * End the stream with a type 5 message: SEQF || E(SEQF || "END" || random string)
+     */
     @Override
     public void close() throws IOException
     {
@@ -47,6 +63,13 @@ public class SecureOutputStream extends OutputStream
         send(Protocol.TYPE_5, seq, endBlock);
     }
 
+    /**
+     * Encrypt and send one stream message
+     *
+     * @param type : message type (4 or 5)
+     * @param seq : sequence number
+     * @param body : data to encrypt
+     */
     private void send(int type, long seq, byte[] body) throws IOException
     {
         try
@@ -55,7 +78,7 @@ public class SecureOutputStream extends OutputStream
         }
         catch (CryptoException e)
         {
-            throw new IOException(e.getMessage(), e);
+            throw new IOException(e.getMessage(), e);   // an OutputStream can only throw IOException
         }
     }
 }

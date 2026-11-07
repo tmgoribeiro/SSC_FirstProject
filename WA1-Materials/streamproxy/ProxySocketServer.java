@@ -7,20 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executors;
 
 /**
- * Proxy implemented with raw sockets only (java.net.ServerSocket / Socket), no
- * com.sun.net.httpserver, no java.net.http.HttpClient, no external libraries.
- * Serves a small page at "/" and relays GET /video/<file> to the origin server,
- * forwarding the Range header and streaming the response body back block by
- * block (no whole-file buffering). Each browser connection handles one request,
- * then closes.
- *
- * WA1 (Secure Proxy): the HTTP request to the origin is replaced by the handshake of
- * the Secure Streaming Protocol (types 1, 2, 3), and the response is read through a
- * SecureInputStream, which decrypts and verifies every Type 4 block and the Type 5 END.
- * The cryptographic configuration is read from proxycrypto.config. After each
- * stream the proxy prints the metrics of WA1 section 4 (ProxyMetrics).
- *
- * Usage: java ProxySocketServer [port=8080] [originHost=localhost] [originPort=8081] [config=proxycrypto.config]
+ * Secure Proxy: serves the player page and relays /video/<file> from the Secure Stream Server through the secure channel (handshake + encrypted blocks)
  */
 public class ProxySocketServer {
 
@@ -47,6 +34,11 @@ public class ProxySocketServer {
             </body></html>
             """;
 
+    /**
+     * Start the proxy and handle each browser connection in its own thread
+     *
+     * @param args : [port] [originHost] [originPort] [config file]
+     */
     public static void main(String[] args) throws Exception {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 8080;
         String originHost = args.length > 1 ? args[1] : "localhost";
@@ -55,10 +47,11 @@ public class ProxySocketServer {
 
         try (ServerSocket server = new ServerSocket(port)) {
             System.out.println("Proxy on http://localhost:" + port + "/  ->  http://" + originHost + ":" + originPort);
-            System.out.println("Secure Proxy: " + cfg.proposal());           
-            System.out.println(Long.getLong("rate", 0) > 0                     // WA1 7.2
+            System.out.println("Secure Proxy: " + cfg.proposal());              // WA1
+            System.out.println(Long.getLong("rate", 0) > 0                     // WA1
                     ? "Pacing: " + Long.getLong("rate", 0) + " kB/s after a burst of " + Long.getLong("burst", 0) + " kB"
-                    : "Pause between blocks: " + Long.getLong("delay", 0) + " ms");            var pool = Executors.newCachedThreadPool();
+                    : "Pause between blocks: " + Long.getLong("delay", 0) + " ms");
+            var pool = Executors.newCachedThreadPool();
             while (true) {
                 Socket client = server.accept();
                 pool.submit(() -> handle(client, originHost, originPort));
@@ -66,6 +59,13 @@ public class ProxySocketServer {
         }
     }
 
+    /**
+     * Handle one browser request: the page at "/" or a movie at /video/<file>
+     *
+     * @param browser : connection with the browser
+     * @param originHost : host of the Stream Server
+     * @param originPort : port of the Stream Server
+     */
     static void handle(Socket browser, String originHost, int originPort) {
         try (browser) {
             InputStream in = browser.getInputStream();
@@ -104,6 +104,11 @@ public class ProxySocketServer {
         }
     }
 
+    /**
+     * Send the HTML page with the video player
+     *
+     * @param out : output stream to the browser
+     */
     static void servePage(OutputStream out) throws IOException {
         byte[] page = INDEX_HTML.getBytes(StandardCharsets.UTF_8);
         StringBuilder headers = new StringBuilder();
@@ -116,6 +121,15 @@ public class ProxySocketServer {
         out.flush();
     }
 
+    /**
+     * Request a movie from the Stream Server through the secure channel and relay it to the browser
+     *
+     * @param browserOut : output stream to the browser
+     * @param originHost : host of the Stream Server
+     * @param originPort : port of the Stream Server
+     * @param name : requested movie
+     * @param rangeHeader : Range header of the browser, or null
+     */
     static void relayFromOrigin(OutputStream browserOut, String originHost, int originPort,
                                  String name, String rangeHeader) throws IOException {
         try (Socket origin = new Socket(originHost, originPort)) {
@@ -123,7 +137,7 @@ public class ProxySocketServer {
             InputStream originIn = origin.getInputStream();
 
             // WA1: the handshake (types 1, 2, 3) replaces the HTTP request
-            //      (extension) MEDIA = movie name || "\r\n" || Range header of the browser (empty if none)
+            //      MEDIA = movie name || "\r\n" || Range header of the browser (empty if none)
             SecureChannel ch = new SecureChannel(originIn, originOut, new CryptoSuite(cfg));
             ProxyMetrics stats = new ProxyMetrics(name, rangeHeader);
             SecureInputStream sin = null;
@@ -178,14 +192,16 @@ public class ProxySocketServer {
 
             // Relay the body block by block; closing either socket cancels the transfer.
             byte[] buf = new byte[BLOCK_SIZE];
-            long relayStart = System.nanoTime();                               
+            long relayStart = System.nanoTime();                                // WA1
             long remaining = contentLength;
             while (remaining > 0) {
                 int n = originIn.read(buf, 0, (int) Math.min(buf.length, remaining));
                 if (n < 0) break;
 		try{
-		    Thread.sleep(pause(contentLength - remaining, relayStart));   
-             
+		    Thread.sleep(pause(contentLength - remaining, relayStart));   // WA1: pacing (default 0, as the original)
+		    // can you push for the minimum required to
+		    // mainain good buffering and playout delay maintaining
+		    // a good vizualization-playing experience ?
 		} catch (InterruptedException e) {
 		    System.out.println("uppps");
 		}
@@ -204,7 +220,7 @@ public class ProxySocketServer {
 
             } catch (ProtocolException e) {                                     // WA1: protocol violation
                 end = "ERROR " + e.getMessage();
-                ch.sendAlert(e.alert, e.getMessage());          // "notified with an alert-error message"
+                ch.sendAlert(e.alert, e.getMessage());                          // notify the server with an alert
                 if (!headersSent) writeSimpleStatus(browserOut, 502, "Bad Gateway");
             } catch (AlertException | CryptoException e) {                      // WA1: alert received from the server
                 end = "ERROR " + e.getMessage();
@@ -218,19 +234,20 @@ public class ProxySocketServer {
                 }
                 if (!headersSent) writeSimpleStatus(browserOut, 502, "Bad Gateway");
             } finally {
-                stats.print(ch, sin, end);                                      // WA1: metrics (section 4)
+                stats.print(ch, sin, end);                                      // WA1: metrics
             }
         }
     }
 
-  /**
-     * WA1 7.2: how long (ms) to wait before relaying the next block, given the bytes
-     * already relayed and when the relay started. Answers the question in the loop:
-     *   -Ddelay=<ms>   fixed pause per block (as the original Thread.sleep, default 0)
-     *   -Drate=<kB/s>  pacing: on average, send at this rate (1 kB/s = 1 byte/ms) ...
-     *   -Dburst=<kB>   ... after a first burst sent at full speed (fast start of the video)
-     * The rate is kept on a schedule (bytes allowed at time t = burst + rate * t), so
-     * when Thread.sleep wakes up late the next pauses are shorter: errors do not add up.
+    /**
+     * WA1: time to wait before relaying the next block (pacing)
+     *   -Ddelay=<ms>   fixed pause per block (default 0)
+     *   -Drate=<kB/s>  average sending rate, kept on a schedule so late wake-ups do not add up
+     *   -Dburst=<kB>   with -Drate: first kB of each request sent at full speed (fast start)
+     *
+     * @param sent : bytes already relayed
+     * @param relayStart : start time of the relay (ns)
+     * @return pause : milliseconds to wait
      */
     static long pause(long sent, long relayStart) {
         long rate = Long.getLong("rate", 0);
@@ -241,8 +258,13 @@ public class ProxySocketServer {
         return Math.max(0, due - now);
     }
 
-
-
+    /**
+     * Send an HTTP response with only a status line and no body
+     *
+     * @param out : output stream to the browser
+     * @param code : HTTP status code
+     * @param reason : HTTP reason phrase
+     */
     static void writeSimpleStatus(OutputStream out, int code, String reason) throws IOException {
         String resp = "HTTP/1.1 " + code + " " + reason + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         out.write(resp.getBytes(StandardCharsets.US_ASCII));

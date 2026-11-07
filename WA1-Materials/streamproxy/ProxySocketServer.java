@@ -56,8 +56,9 @@ public class ProxySocketServer {
         try (ServerSocket server = new ServerSocket(port)) {
             System.out.println("Proxy on http://localhost:" + port + "/  ->  http://" + originHost + ":" + originPort);
             System.out.println("Secure Proxy: " + cfg.proposal());           
-            System.out.println("Pause between blocks: " + Long.getLong("delay", 0) + " ms");   // WA1 7.2
-            var pool = Executors.newCachedThreadPool();
+            System.out.println(Long.getLong("rate", 0) > 0                     // WA1 7.2
+                    ? "Pacing: " + Long.getLong("rate", 0) + " kB/s after a burst of " + Long.getLong("burst", 0) + " kB"
+                    : "Pause between blocks: " + Long.getLong("delay", 0) + " ms");            var pool = Executors.newCachedThreadPool();
             while (true) {
                 Socket client = server.accept();
                 pool.submit(() -> handle(client, originHost, originPort));
@@ -177,14 +178,14 @@ public class ProxySocketServer {
 
             // Relay the body block by block; closing either socket cancels the transfer.
             byte[] buf = new byte[BLOCK_SIZE];
+            long relayStart = System.nanoTime();                               
             long remaining = contentLength;
             while (remaining > 0) {
                 int n = originIn.read(buf, 0, (int) Math.min(buf.length, remaining));
                 if (n < 0) break;
 		try{
-            Thread.sleep(Long.getLong("delay", 0));		    // can you push for the minimum required to
-		    // mainain good buffering and playout delay maintaining
-		    // a good vizualization-playing experience ?
+		    Thread.sleep(pause(contentLength - remaining, relayStart));   
+             
 		} catch (InterruptedException e) {
 		    System.out.println("uppps");
 		}
@@ -221,6 +222,26 @@ public class ProxySocketServer {
             }
         }
     }
+
+  /**
+     * WA1 7.2: how long (ms) to wait before relaying the next block, given the bytes
+     * already relayed and when the relay started. Answers the question in the loop:
+     *   -Ddelay=<ms>   fixed pause per block (as the original Thread.sleep, default 0)
+     *   -Drate=<kB/s>  pacing: on average, send at this rate (1 kB/s = 1 byte/ms) ...
+     *   -Dburst=<kB>   ... after a first burst sent at full speed (fast start of the video)
+     * The rate is kept on a schedule (bytes allowed at time t = burst + rate * t), so
+     * when Thread.sleep wakes up late the next pauses are shorter: errors do not add up.
+     */
+    static long pause(long sent, long relayStart) {
+        long rate = Long.getLong("rate", 0);
+        if (rate <= 0) return Long.getLong("delay", 0);
+        long burst = Long.getLong("burst", 0) * 1000;
+        long due = (sent - burst) / rate;                                   // ms after the start
+        long now = (System.nanoTime() - relayStart) / 1_000_000;
+        return Math.max(0, due - now);
+    }
+
+
 
     static void writeSimpleStatus(OutputStream out, int code, String reason) throws IOException {
         String resp = "HTTP/1.1 " + code + " " + reason + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";

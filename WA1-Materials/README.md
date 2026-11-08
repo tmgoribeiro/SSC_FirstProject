@@ -7,15 +7,15 @@ Secure Proxy and Secure Stream Server built on top of the provided insecure
 proxy and the server is replaced by the **Secure Streaming Protocol** of the
 assignment (§2.2):
 
-* **Handshake** – Type 1 `SEQX ‖ PCC` (clear), Type 2 `E(SEQX+1 ‖ SRV ‖ CCC)`,
-  Type 3 `E(SEQX+2 ‖ SHA-256(SRV) ‖ MEDIA)`.
+* **Handshake** – Type 1 `SEQX ‖ PCC` (clear), Type 2 `E(SEQY ‖ SRV ‖ CCC)` with
+  `SEQY = SEQX+1`, Type 3 `E(SEQZ ‖ R ‖ MEDIA)` with `SEQZ = SEQY+1` and `R = SHA-256(SRV)`.
 * **Stream** – every media block is a Type 4 message `SEQB ‖ E(block)`; the end of
   the stream is a Type 5 message `SEQF ‖ E(SEQF ‖ "END" ‖ random)`.
 * **Alerts** – any protocol violation is notified with a Type 255 message.
 
 The cryptographic configuration (algorithm, mode, IV size, padding, MAC and keys)
 is read from XML configuration files and can be changed **without recompiling**.
-All commands below were tested on Windows 11 and Linux with Java 21/23.
+All commands below were tested on Windows (PowerShell) and on Linux (bash).
 
 ---
 
@@ -23,7 +23,7 @@ All commands below were tested on Windows 11 and Linux with Java 21/23.
 
 | Requirement | Notes |
 |---|---|
-| Java JDK **17 or newer** | uses `HexFormat`, text blocks and `switch ->`; tested with 21 and 23 |
+| Java JDK **17 or newer** | uses `HexFormat`, text blocks and `switch ->` |
 | `lib/bcprov-jdk18on-1.86.jar` | Bouncy Castle provider (the jar of Lab 3.1), **included**. Only needed for RC6, AES/CCM and AES-CMAC |
 | A web browser | Chrome / Edge / Firefox, to play the video |
 | `curl` (optional) | for the command-line tests (included in Windows 10/11 as `curl.exe`) |
@@ -67,7 +67,7 @@ javac -cp lib/bcprov-jdk18on-1.86.jar -d streamproxy/out  common/*.java streampr
 javac -cp lib/bcprov-jdk18on-1.86.jar -d tools/out        common/*.java tools/*.java
 ```
 
-**Windows (PowerShell)** – the same commands with `\` paths:
+**Windows (PowerShell)** – the same commands (`javac` expands `*.java` itself):
 ```powershell
 javac -cp lib\bcprov-jdk18on-1.86.jar -d streamserver/out common/*.java streamserver/*.java
 javac -cp lib\bcprov-jdk18on-1.86.jar -d streamproxy/out  common/*.java streamproxy/*.java
@@ -77,6 +77,12 @@ javac -cp lib\bcprov-jdk18on-1.86.jar -d tools/out        common/*.java tools/*.
 ## 4. Run (quick verification, one machine)
 
 Open two terminals in the project root.
+
+**Configuration files.** The server uses `streamserver/sservercrypto.config` and the
+proxy uses `streamproxy/proxycrypto.config`; each path is given as the **last
+argument** of the program (commands below). If it is omitted, the program looks for
+`sservercrypto.config` / `proxycrypto.config` in the current directory. Both files
+must have the same algorithms and the same keys (§5).
 
 **Terminal 1 – Secure Stream Server** (`port mediaDir config`)
 ```bash
@@ -147,17 +153,21 @@ java -cp streamserver/out:lib/bcprov-jdk18on-1.86.jar OriginSocketServer 8081 st
 java -cp streamproxy/out:lib/bcprov-jdk18on-1.86.jar  ProxySocketServer 8080 localhost 8081 examples/chacha20-poly1305.config
 ```
 
-| File | Proposal (PCC) | Construction | Provider |
-|---|---|---|---|
-| `streamserver/sservercrypto.config`, `streamproxy/proxycrypto.config` | AES/GCM/96/NoPadding | AEAD | SunJCE |
-| `examples/chacha20-poly1305.config` | ChaCha20/Poly1305/96/NULL | AEAD | SunJCE |
-| `examples/aes-ccm.config` | AES/CCM/96/NoPadding | AEAD (128-bit tag) | Bouncy Castle |
-| `examples/aes-ctr-hmac.config` | AES/CTR/128/NoPadding + HMAC-SHA256 | Encrypt-then-MAC | SunJCE |
-| `examples/aes-ctr-cmac.config` | AES/CTR/128/NoPadding + AES-CMAC | Encrypt-then-MAC | SunJCE + BC |
-| `examples/aes-cbc-hmac512.config` | AES/CBC/128/PKCS5Padding + HMAC-SHA-512 | Encrypt-then-MAC | SunJCE |
-| `examples/rc6-cbc-hmac.config` | RC6/CBC/128/PKCS5Padding + HMAC-SHA256 | Encrypt-then-MAC | Bouncy Castle |
-| `examples/chacha20-hmac.config` | ChaCha20/NULL/96/NULL + HMAC-SHA256 | Encrypt-then-MAC | SunJCE |
-| `examples/aes-gcm-outra-chave.config` | AES/GCM/96/NoPadding | same as default, **other key** (test of a wrong key) | SunJCE |
+| File | Proposal (PCC) | MAC | Construction | Provider |
+|---|---|---|---|---|
+| `streamserver/sservercrypto.config`, `streamproxy/proxycrypto.config` | AES/GCM/96/NoPadding | – | AEAD | SunJCE |
+| `examples/chacha20-poly1305.config` | ChaCha20/Poly1305/96/NULL | – | AEAD | SunJCE |
+| `examples/aes-ccm.config` | AES/CCM/96/NoPadding | – | AEAD (128-bit tag) | Bouncy Castle |
+| `examples/aes-ctr-hmac.config` | AES/CTR/128/NoPadding | HMAC-SHA256 | Encrypt-then-MAC | SunJCE |
+| `examples/aes-ctr-cmac.config` | AES/CTR/128/NoPadding | AES-CMAC | Encrypt-then-MAC | SunJCE + BC |
+| `examples/aes-cbc-hmac512.config` | AES/CBC/128/PKCS5Padding | HMAC-SHA-512 | Encrypt-then-MAC | SunJCE |
+| `examples/rc6-cbc-hmac.config` | RC6/CBC/128/PKCS5Padding | HMAC-SHA256 | Encrypt-then-MAC | Bouncy Castle |
+| `examples/chacha20-hmac.config` | ChaCha20/NULL/96/NULL | HMAC-SHA256 | Encrypt-then-MAC | SunJCE |
+| `examples/aes-gcm-outra-chave.config` | AES/GCM/96/NoPadding | – | same as default, **other key** (test of a wrong key) | SunJCE |
+
+The PCC sent in the handshake (`ALG/MODE/IV/Padding`, as in the assignment) does not
+include the MAC: a proxy and a server that differ only in the MAC are not refused with
+`CONFIG_REJECTED`, but the first protected message fails with `INTEGRITY_FAILURE`.
 
 Configurations that are **refused at start-up** (the program stops with a `CryptoException`):
 
@@ -200,13 +210,14 @@ test are in `results/`.
 |---|---|---|
 | Key generation | `java -cp tools/out:lib/bcprov-jdk18on-1.86.jar GenerateKey AES 256` | a random key in hex and Base64 |
 | Configuration check | `java -cp tools/out:lib/bcprov-jdk18on-1.86.jar ConfigTest examples/*.config` (PowerShell: `... ConfigTest (Get-ChildItem examples\*.config).FullName`) | `VALID` for the 8 valid files, `REFUSED: <reason>` for the 5 `INVALIDO-*` |
-| Crypto layer | `java -cp tools/out:lib/bcprov-jdk18on-1.86.jar CryptoSuiteTest examples/aes-ccm.config` | round-trip, fresh nonce, tampering rejected, overhead per 1 KB, `ALL TESTS PASSED` |
+| Crypto layer | `java -cp tools/out:lib/bcprov-jdk18on-1.86.jar CryptoSuiteTest examples/aes-ccm.config` | round-trip, fresh nonce, tampering rejected, overhead per 1 KiB message, `ALL TESTS PASSED` |
 | Protocol messages | `java -cp tools/out:lib/bcprov-jdk18on-1.86.jar ChannelTest examples/aes-ctr-hmac.config` | replay, reorder, drop, type 4→5, bit flip, wrong version... all detected, `ALL TESTS PASSED` |
 | Handshake + MITM | `java -cp tools/out:lib/bcprov-jdk18on-1.86.jar HandshakeTest examples/aes-ccm.config examples/aes-ccm.config streamproxy/proxycrypto.config` | 7 tests (normal, incompatible config, wrong key, changed PCC, changed SEQX, replay, wrong order), `ALL TESTS PASSED` |
 
 ### 7.1 Man-in-the-middle on the real stream (`StreamMallory`)
 
-Mallory sits between the proxy and the server and attacks block 50 of the stream.
+Mallory sits between the proxy and the server and attacks the 50th Type 4 message of the
+stream (the 49th media block; an optional 5th argument `N` chooses another message).
 
 ```bash
 # 1. server (as in §4), port 8081
@@ -262,8 +273,21 @@ java -Drate=250 -Dburst=2000 -cp streamproxy/out:lib/bcprov-jdk18on-1.86.jar Pro
 | File | Size | Duration | Included |
 |---|---|---|---|
 | `dante.mp4` | 25.9 MB | 1 min 55 s | yes (provided with the assignment) |
-| `sintel.mp4` | 7.6 MB | 52 s | Sintel trailer 480p, Blender Foundation (CC BY) – <https://durian.blender.org/download/> |
-| `caminandes.mp4` | 126 MB | 2 min 26 s | optional – *Caminandes: Gran Dillama*, Blender Foundation (CC BY), `caminandes_gran_dillama.mp4.zip` from <https://cdimage.debian.org/mirror/blender.org/demo/movies> |
+| `sintel.mp4` | 7.6 MB | 52 s | no – Sintel trailer 480p, Blender Foundation (CC BY), <https://durian.blender.org/download/> |
+| `caminandes.mp4` | 126 MB | 2 min 26 s | no – *Caminandes: Gran Dillama*, Blender Foundation (CC BY), `caminandes_gran_dillama.mp4.zip` from <https://cdimage.debian.org/mirror/blender.org/demo/movies> |
+
+`sintel.mp4` and `caminandes.mp4` are only needed for the concurrency test (§7.2);
+download them into `streamserver/media/` with these names.
 
 Any MP4 file that the browser can play can be added to `streamserver/media/`
 (use a file name without spaces).
+
+## 9. Known limitations
+
+* The handshake uses the message formats of the assignment, which rely on the
+  pre-shared keys of the configuration files. There is no Diffie-Hellman exchange,
+  so there is no forward secrecy: a leaked key exposes recorded sessions. This is
+  left to Work Assignment 2.
+* Alert messages (Type 255) are not authenticated; an attacker on the path can
+  already cut the connection, so this only affects the reported reason.
+* No Docker containers are provided; the programs run directly with `java`.

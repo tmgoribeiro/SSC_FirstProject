@@ -2,3 +2,5 @@
 **/streamserver/media/caminandes.mp4
 **/streamserver/media/sintel.mp4
 .DS_Store
+*.class
+*~
